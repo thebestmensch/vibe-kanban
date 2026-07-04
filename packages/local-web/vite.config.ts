@@ -135,6 +135,11 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // Local board data API (JM-714) — served at origin root by the backend.
+      '/v1': {
+        target: `http://localhost:${process.env.BACKEND_PORT || '3001'}`,
+        changeOrigin: true,
+      },
     },
     fs: {
       allow: [path.resolve(__dirname, '.'), path.resolve(__dirname, '../..')],

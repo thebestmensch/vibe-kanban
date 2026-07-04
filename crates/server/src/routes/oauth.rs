@@ -282,6 +282,17 @@ async fn status(
 async fn get_token(
     State(deployment): State<DeploymentImpl>,
 ) -> Result<ResponseJson<ApiResponse<TokenResponse>>, ApiError> {
+    // JM-714: in local-board mode there is no cloud client to mint a token, and
+    // the local `/v1/*` routes do not validate the bearer. Return a static
+    // sentinel so the frontend fetch wrapper (which only checks for a non-null
+    // token) proceeds. Gated by VK_LOCAL_BOARD; the cloud path is unchanged.
+    if std::env::var("VK_LOCAL_BOARD").is_ok() {
+        return Ok(ResponseJson(ApiResponse::success(TokenResponse {
+            access_token: "vk-local-board".to_string(),
+            expires_at: None,
+        })));
+    }
+
     let remote_client = deployment.remote_client()?;
 
     // This will auto-refresh the token if expired

@@ -162,8 +162,10 @@ impl ProjectStatuses {
         .await
     }
 
-    pub async fn update(
-        pool: &SqlitePool,
+    /// Partial update on a caller-supplied connection so `bulk_update` can batch
+    /// column reorders into one transaction (all-or-nothing).
+    async fn update_on(
+        conn: &mut sqlx::SqliteConnection,
         id: Uuid,
         req: &UpdateProjectStatusRequest,
     ) -> Result<ProjectStatus, sqlx::Error> {
@@ -179,7 +181,7 @@ impl ProjectStatuses {
                FROM project_statuses WHERE id = $1"#,
             id
         )
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or(sqlx::Error::RowNotFound)?;
 
@@ -206,8 +208,38 @@ impl ProjectStatuses {
             sort_order,
             hidden
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await
+    }
+
+    /// Partial update of a single status.
+    pub async fn update(
+        pool: &SqlitePool,
+        id: Uuid,
+        req: &UpdateProjectStatusRequest,
+    ) -> Result<ProjectStatus, sqlx::Error> {
+        let mut conn = pool.acquire().await?;
+        Self::update_on(&mut conn, id, req).await
+    }
+
+    /// Apply several column updates atomically (see `Issues::bulk_update`).
+    pub async fn bulk_update(
+        pool: &SqlitePool,
+        updates: &[(Uuid, UpdateProjectStatusRequest)],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        for (id, req) in updates {
+            Self::update_on(&mut tx, *id, req).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query!("DELETE FROM project_statuses WHERE id = $1", id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -269,7 +301,10 @@ impl IssueRow {
 pub struct Issues;
 
 impl Issues {
-    async fn row_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<IssueRow>, sqlx::Error> {
+    async fn row_by_id<'e, E>(executor: E, id: Uuid) -> Result<Option<IssueRow>, sqlx::Error>
+    where
+        E: sqlx::SqliteExecutor<'e>,
+    {
         sqlx::query_as!(
             IssueRow,
             r#"SELECT id                      as "id!: Uuid",
@@ -293,7 +328,7 @@ impl Issues {
                FROM issues WHERE id = $1"#,
             id
         )
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
     }
 
@@ -503,12 +538,14 @@ impl Issues {
     /// Partial update: fetch-then-overwrite (matches the `Tag` idiom) so the
     /// `Option<Option<T>>` "field present vs. absent" semantics stay explicit
     /// without dynamic SQL.
-    pub async fn update(
-        pool: &SqlitePool,
+    /// Partial update on a caller-supplied connection, so `bulk_update` can run a
+    /// whole batch inside one transaction (all-or-nothing).
+    async fn update_on(
+        conn: &mut sqlx::SqliteConnection,
         id: Uuid,
         req: &UpdateIssueRequest,
     ) -> Result<Issue, sqlx::Error> {
-        let existing = Self::row_by_id(pool, id)
+        let existing = Self::row_by_id(&mut *conn, id)
             .await?
             .ok_or(sqlx::Error::RowNotFound)?;
 
@@ -595,10 +632,35 @@ impl Issues {
             parent_issue_sort_order,
             extension_metadata
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
 
         Ok(row.into_api())
+    }
+
+    /// Partial update of a single issue.
+    pub async fn update(
+        pool: &SqlitePool,
+        id: Uuid,
+        req: &UpdateIssueRequest,
+    ) -> Result<Issue, sqlx::Error> {
+        let mut conn = pool.acquire().await?;
+        Self::update_on(&mut conn, id, req).await
+    }
+
+    /// Apply several partial updates atomically. Drag-reorder sends the whole
+    /// batch as one optimistic operation, so a mid-batch failure must not leave a
+    /// partially reordered board — the transaction rolls back on the first error.
+    pub async fn bulk_update(
+        pool: &SqlitePool,
+        updates: &[(Uuid, UpdateIssueRequest)],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        for (id, req) in updates {
+            Self::update_on(&mut tx, *id, req).await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<u64, sqlx::Error> {

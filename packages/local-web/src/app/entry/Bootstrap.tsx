@@ -12,6 +12,7 @@ import { router } from '@web/app/router';
 import { oauthApi } from '@/shared/lib/api';
 import { tokenManager } from '@/shared/lib/auth/tokenManager';
 import { configureAuthRuntime } from '@/shared/lib/auth/runtime';
+import { setLocalBoardMode } from '@/shared/lib/remoteApi';
 import '@/shared/types/modals';
 import { queryClient } from '@/shared/lib/queryClient';
 import { isTauriApp } from '@/shared/lib/platform';
@@ -76,6 +77,10 @@ if (isTauriApp()) {
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('gesturechange', (e) => e.preventDefault());
 }
+
+// JM-714: this is the local build — read board data from local /v1/fallback/*
+// REST instead of the (absent) cloud Electric server.
+setLocalBoardMode(true);
 
 configureAuthRuntime({
   getToken: () => tokenManager.getToken(),

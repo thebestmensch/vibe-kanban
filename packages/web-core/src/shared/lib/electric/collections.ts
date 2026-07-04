@@ -2,7 +2,11 @@ import { electricCollectionOptions } from '@tanstack/electric-db-collection';
 import { createCollection } from '@tanstack/react-db';
 
 import { getAuthRuntime } from '@/shared/lib/auth/runtime';
-import { getRemoteApiUrl, makeRequest } from '@/shared/lib/remoteApi';
+import {
+  getRemoteApiUrl,
+  isLocalBoardMode,
+  makeRequest,
+} from '@/shared/lib/remoteApi';
 import type { MutationDefinition, ShapeDefinition } from 'shared/remote-types';
 import type { CollectionConfig, SyncError } from '@/shared/lib/electric/types';
 
@@ -537,7 +541,9 @@ function createHybridSync(args: {
 
   return (syncParams: SyncParams): SyncResult => {
     const runtime = getOrCreateSourceRuntime(args.sourceKey);
-    if (runtime.fallbackLocked) {
+    // JM-714: local board has no Electric server — read straight from the REST
+    // snapshot without attempting (and 3s-timing-out on) an Electric shape.
+    if (isLocalBoardMode() || runtime.fallbackLocked) {
       return fallbackSync(syncParams);
     }
 
