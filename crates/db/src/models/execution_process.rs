@@ -591,19 +591,28 @@ impl ExecutionProcess {
             .executor_action()
             .map_err(|e| ExecutionProcessError::ValidationError(e.to_string()))?;
 
-        match &action.typ {
-            ExecutorActionType::CodingAgentInitialRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            ExecutorActionType::CodingAgentFollowUpRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            ExecutorActionType::ReviewRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            _ => Err(ExecutionProcessError::ValidationError(
+        match Self::profile_id_from_action(action) {
+            Some(profile_id) => Ok(Some(profile_id)),
+            None => Err(ExecutionProcessError::ValidationError(
                 "Couldn't find profile from initial request".to_string(),
             )),
+        }
+    }
+
+    /// Map a coding-agent executor action to its executor profile id.
+    /// Returns `None` for action types that don't carry a profile (e.g. scripts).
+    fn profile_id_from_action(action: &ExecutorAction) -> Option<ExecutorProfileId> {
+        match &action.typ {
+            ExecutorActionType::CodingAgentInitialRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            ExecutorActionType::CodingAgentFollowUpRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            ExecutorActionType::ReviewRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            _ => None,
         }
     }
 
@@ -687,15 +696,8 @@ impl ExecutionProcess {
             let ExecutorActionField::ExecutorAction(action) = row.executor_action.0 else {
                 continue;
             };
-            let profile_id = match &action.typ {
-                ExecutorActionType::CodingAgentInitialRequest(request) => {
-                    request.executor_config.profile_id()
-                }
-                ExecutorActionType::CodingAgentFollowUpRequest(request) => {
-                    request.executor_config.profile_id()
-                }
-                ExecutorActionType::ReviewRequest(request) => request.executor_config.profile_id(),
-                _ => continue,
+            let Some(profile_id) = Self::profile_id_from_action(&action) else {
+                continue;
             };
             result.entry(row.workspace_id).or_default().push(profile_id);
         }
