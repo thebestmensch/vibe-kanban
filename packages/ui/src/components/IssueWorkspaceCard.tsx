@@ -2,6 +2,7 @@ import { cn } from '../lib/cn';
 import { useTranslation } from 'react-i18next';
 import {
   GitPullRequestIcon,
+  GitBranchIcon,
   DotsThreeIcon,
   LinkBreakIcon,
   TrashIcon,
@@ -43,6 +44,10 @@ export interface WorkspaceWithStats {
   hasUnseenActivity?: boolean;
   latestProcessCompletedAt?: string;
   latestProcessStatus?: 'running' | 'completed' | 'failed' | 'killed';
+  /** Git branch of the workspace's worktree */
+  branch?: string | null;
+  /** Display names of coding agents currently running, in launch order */
+  runningAgents?: string[];
 }
 
 export interface IssueWorkspaceCardProps {
@@ -249,6 +254,16 @@ export function IssueWorkspaceCard({
             <span className="text-low/50 shrink-0">·</span>
           )}
 
+          {workspace.branch && (
+            <>
+              <span className="flex items-center gap-0.5 min-w-0 shrink">
+                <GitBranchIcon className="size-icon-xs shrink-0" />
+                <span className="truncate">{workspace.branch}</span>
+              </span>
+              <span className="text-low/50 shrink-0">·</span>
+            </>
+          )}
+
           <span className="whitespace-nowrap shrink-0">{timeAgo}</span>
           {workspace.filesChanged > 0 && (
             <>
@@ -307,6 +322,25 @@ export function IssueWorkspaceCard({
           ) : null}
         </div>
       </div>
+
+      {/* Row 3: coding agents currently running in this workspace */}
+      {workspace.runningAgents && workspace.runningAgents.length > 0 && (
+        <div className="flex flex-col gap-half">
+          {workspace.runningAgents.map((agentName, index) => (
+            <div
+              key={`${agentName}-${index}`}
+              className="flex items-center gap-half text-sm text-low min-w-0"
+            >
+              <CircleIcon
+                className="size-icon-2xs text-brand shrink-0"
+                weight="fill"
+              />
+              <span className="truncate">{agentName}</span>
+              <RunningDots />
+            </div>
+          ))}
+        </div>
+      )}
     </IssueWorkspaceCardContainer>
   );
 }

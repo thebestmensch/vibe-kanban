@@ -591,19 +591,28 @@ impl ExecutionProcess {
             .executor_action()
             .map_err(|e| ExecutionProcessError::ValidationError(e.to_string()))?;
 
-        match &action.typ {
-            ExecutorActionType::CodingAgentInitialRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            ExecutorActionType::CodingAgentFollowUpRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            ExecutorActionType::ReviewRequest(request) => {
-                Ok(Some(request.executor_config.profile_id()))
-            }
-            _ => Err(ExecutionProcessError::ValidationError(
+        match Self::profile_id_from_action(action) {
+            Some(profile_id) => Ok(Some(profile_id)),
+            None => Err(ExecutionProcessError::ValidationError(
                 "Couldn't find profile from initial request".to_string(),
             )),
+        }
+    }
+
+    /// Map a coding-agent executor action to its executor profile id.
+    /// Returns `None` for action types that don't carry a profile (e.g. scripts).
+    fn profile_id_from_action(action: &ExecutorAction) -> Option<ExecutorProfileId> {
+        match &action.typ {
+            ExecutorActionType::CodingAgentInitialRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            ExecutorActionType::CodingAgentFollowUpRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            ExecutorActionType::ReviewRequest(request) => {
+                Some(request.executor_config.profile_id())
+            }
+            _ => None,
         }
     }
 
@@ -652,6 +661,46 @@ impl ExecutionProcess {
             .into_iter()
             .map(|info| (info.workspace_id, info))
             .collect();
+
+        Ok(result)
+    }
+
+    /// Find the executor profiles of all running coding-agent processes, grouped by
+    /// workspace, filtered by the workspace's archived status. Processes are ordered
+    /// by start time so the frontend can render them in launch order.
+    pub async fn find_running_coding_agents_for_workspaces(
+        pool: &SqlitePool,
+        archived: bool,
+    ) -> Result<HashMap<Uuid, Vec<ExecutorProfileId>>, sqlx::Error> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                s.workspace_id as "workspace_id!: Uuid",
+                ep.executor_action as "executor_action!: sqlx::types::Json<ExecutorActionField>"
+            FROM execution_processes ep
+            JOIN sessions s ON ep.session_id = s.id
+            JOIN workspaces w ON s.workspace_id = w.id
+            WHERE w.archived = $1
+              AND ep.status = 'running'
+              AND ep.run_reason = 'codingagent'
+              AND ep.dropped = FALSE
+            ORDER BY ep.started_at ASC
+            "#,
+            archived
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut result: HashMap<Uuid, Vec<ExecutorProfileId>> = HashMap::new();
+        for row in rows {
+            let ExecutorActionField::ExecutorAction(action) = row.executor_action.0 else {
+                continue;
+            };
+            let Some(profile_id) = Self::profile_id_from_action(&action) else {
+                continue;
+            };
+            result.entry(row.workspace_id).or_default().push(profile_id);
+        }
 
         Ok(result)
     }

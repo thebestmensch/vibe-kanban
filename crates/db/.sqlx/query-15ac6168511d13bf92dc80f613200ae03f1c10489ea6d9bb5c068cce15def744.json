@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                s.workspace_id as \"workspace_id!: Uuid\",\n                ep.executor_action as \"executor_action!: sqlx::types::Json<ExecutorActionField>\"\n            FROM execution_processes ep\n            JOIN sessions s ON ep.session_id = s.id\n            JOIN workspaces w ON s.workspace_id = w.id\n            WHERE w.archived = $1\n              AND ep.status = 'running'\n              AND ep.run_reason = 'codingagent'\n              AND ep.dropped = FALSE\n            ORDER BY ep.started_at ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "workspace_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "executor_action!: sqlx::types::Json<ExecutorActionField>",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "15ac6168511d13bf92dc80f613200ae03f1c10489ea6d9bb5c068cce15def744"
+}

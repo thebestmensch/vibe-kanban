@@ -15,6 +15,7 @@ import { useAuth } from '@/shared/hooks/auth/useAuth';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
 import { useIsMobile } from '@/shared/hooks/useIsMobile';
 import { cn } from '@/shared/lib/utils';
+import { getAgentName } from '@/shared/components/AgentIcon';
 import { useCurrentKanbanRouteState } from '@/shared/hooks/useCurrentKanbanRouteState';
 import {
   useUiPreferencesStore,
@@ -625,6 +626,12 @@ export function KanbanContainer() {
             hasUnseenActivity: localWorkspace?.hasUnseenActivity,
             latestProcessCompletedAt: localWorkspace?.latestProcessCompletedAt,
             latestProcessStatus: localWorkspace?.latestProcessStatus,
+            branch: localWorkspace?.branch,
+            runningAgents: localWorkspace?.runningAgents?.map((profile) =>
+              profile.variant
+                ? `${getAgentName(profile.executor)} (${profile.variant})`
+                : getAgentName(profile.executor)
+            ),
           };
         });
 
