@@ -6,8 +6,18 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions},
 };
 use utils::assets::asset_dir;
+use uuid::Uuid;
 
 pub mod models;
+
+/// Single seeded organization for the local-only board (JM-714). Fixed so the
+/// issue_prefix lookup and `projects.organization_id` FK keep meaning without a
+/// sign-in flow. Matches `X'00…01'` seeded in `20260318000000_local_board.sql`.
+pub const LOCAL_ORG_ID: Uuid = Uuid::from_u128(1);
+
+/// Single seeded user; carries the current-user identity the shell renders and
+/// the nullable `issues.creator_user_id`. Matches `X'00…02'` in the same migration.
+pub const LOCAL_USER_ID: Uuid = Uuid::from_u128(2);
 
 async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), Error> {
     use std::collections::HashSet;

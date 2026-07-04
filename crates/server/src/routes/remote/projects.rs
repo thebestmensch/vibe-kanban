@@ -5,6 +5,8 @@ use axum::{
     response::Json as ResponseJson,
     routing::get,
 };
+use db::models::board::BoardProjects;
+use deployment::Deployment;
 use serde::Deserialize;
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -26,16 +28,18 @@ async fn list_remote_projects(
     State(deployment): State<DeploymentImpl>,
     Query(query): Query<ListRemoteProjectsQuery>,
 ) -> Result<ResponseJson<ApiResponse<ListProjectsResponse>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.list_remote_projects(query.organization_id).await?;
-    Ok(ResponseJson(ApiResponse::success(response)))
+    let projects = BoardProjects::list_by_org(&deployment.db().pool, query.organization_id).await?;
+    Ok(ResponseJson(ApiResponse::success(ListProjectsResponse {
+        projects,
+    })))
 }
 
 async fn get_remote_project(
     State(deployment): State<DeploymentImpl>,
     Path(project_id): Path<Uuid>,
 ) -> Result<ResponseJson<ApiResponse<Project>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let project = client.get_remote_project(project_id).await?;
+    let project = BoardProjects::get(&deployment.db().pool, project_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
     Ok(ResponseJson(ApiResponse::success(project)))
 }

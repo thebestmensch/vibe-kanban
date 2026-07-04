@@ -5,6 +5,8 @@ use axum::{
     response::Json as ResponseJson,
     routing::get,
 };
+use db::models::board::ProjectStatuses;
+use deployment::Deployment;
 use serde::Deserialize;
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -24,7 +26,9 @@ async fn list_project_statuses(
     State(deployment): State<DeploymentImpl>,
     Query(query): Query<ListProjectStatusesQuery>,
 ) -> Result<ResponseJson<ApiResponse<ListProjectStatusesResponse>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.list_project_statuses(query.project_id).await?;
-    Ok(ResponseJson(ApiResponse::success(response)))
+    let project_statuses =
+        ProjectStatuses::list_by_project(&deployment.db().pool, query.project_id).await?;
+    Ok(ResponseJson(ApiResponse::success(
+        ListProjectStatusesResponse { project_statuses },
+    )))
 }
