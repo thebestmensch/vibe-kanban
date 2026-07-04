@@ -9,6 +9,7 @@ use db::models::{
     workspace::Workspace,
 };
 use deployment::Deployment;
+use executors::profile::ExecutorProfileId;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utils::response::ApiResponse;
@@ -51,6 +52,9 @@ pub struct WorkspaceSummary {
     pub pr_number: Option<i64>,
     /// PR URL for this workspace (if any PR exists)
     pub pr_url: Option<String>,
+    /// Executor profiles of coding-agent processes currently running in this
+    /// workspace, in launch order (empty when nothing is running)
+    pub running_agents: Vec<ExecutorProfileId>,
 }
 
 /// Response containing summaries for requested workspaces
@@ -109,6 +113,10 @@ pub async fn get_workspace_summaries(
     // 5. Check which workspaces have unseen coding agent turns
     let unseen_workspaces = CodingAgentTurn::find_workspaces_with_unseen(pool, archived).await?;
 
+    // 5b. Collect running coding-agent executor profiles per workspace
+    let mut running_agents_by_workspace =
+        ExecutionProcess::find_running_coding_agents_for_workspaces(pool, archived).await?;
+
     // 6. Get PR status for each workspace
     let pr_statuses = PullRequest::get_latest_for_workspaces(pool, archived).await?;
 
@@ -159,6 +167,7 @@ pub async fn get_workspace_summaries(
                 pr_status: pr_statuses.get(&id).map(|pr| pr.pr_status.clone()),
                 pr_number: pr_statuses.get(&id).map(|pr| pr.pr_number),
                 pr_url: pr_statuses.get(&id).map(|pr| pr.pr_url.clone()),
+                running_agents: running_agents_by_workspace.remove(&id).unwrap_or_default(),
             }
         })
         .collect();

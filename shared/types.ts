@@ -476,7 +476,12 @@ pr_number: bigint | null,
 /**
  * PR URL for this workspace (if any PR exists)
  */
-pr_url: string | null, };
+pr_url: string | null, 
+/**
+ * Executor profiles of coding-agent processes currently running in this
+ * workspace, in launch order (empty when nothing is running)
+ */
+running_agents: Array<ExecutorProfileId>, };
 
 export type WorkspaceSummaryResponse = { summaries: Array<WorkspaceSummary>, };
 

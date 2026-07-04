@@ -656,6 +656,53 @@ impl ExecutionProcess {
         Ok(result)
     }
 
+    /// Find the executor profiles of all running coding-agent processes, grouped by
+    /// workspace, filtered by the workspace's archived status. Processes are ordered
+    /// by start time so the frontend can render them in launch order.
+    pub async fn find_running_coding_agents_for_workspaces(
+        pool: &SqlitePool,
+        archived: bool,
+    ) -> Result<HashMap<Uuid, Vec<ExecutorProfileId>>, sqlx::Error> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                s.workspace_id as "workspace_id!: Uuid",
+                ep.executor_action as "executor_action!: sqlx::types::Json<ExecutorActionField>"
+            FROM execution_processes ep
+            JOIN sessions s ON ep.session_id = s.id
+            JOIN workspaces w ON s.workspace_id = w.id
+            WHERE w.archived = $1
+              AND ep.status = 'running'
+              AND ep.run_reason = 'codingagent'
+              AND ep.dropped = FALSE
+            ORDER BY ep.started_at ASC
+            "#,
+            archived
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut result: HashMap<Uuid, Vec<ExecutorProfileId>> = HashMap::new();
+        for row in rows {
+            let ExecutorActionField::ExecutorAction(action) = row.executor_action.0 else {
+                continue;
+            };
+            let profile_id = match &action.typ {
+                ExecutorActionType::CodingAgentInitialRequest(request) => {
+                    request.executor_config.profile_id()
+                }
+                ExecutorActionType::CodingAgentFollowUpRequest(request) => {
+                    request.executor_config.profile_id()
+                }
+                ExecutorActionType::ReviewRequest(request) => request.executor_config.profile_id(),
+                _ => continue,
+            };
+            result.entry(row.workspace_id).or_default().push(profile_id);
+        }
+
+        Ok(result)
+    }
+
     /// Find all workspaces with running dev servers, filtered by archived status.
     /// Returns a set of workspace IDs that have at least one running dev server.
     pub async fn find_workspaces_with_running_dev_servers(
