@@ -106,7 +106,10 @@ pub struct UserSystemInfo {
 async fn get_user_system_info(
     State(deployment): State<DeploymentImpl>,
 ) -> ResponseJson<ApiResponse<UserSystemInfo>> {
-    let config = deployment.config().read().await.clone();
+    // Redact Linear account tokens: `Config` is returned to the client here, and
+    // Linear secrets must never leave over the wire (ADR 0002). Accounts are
+    // managed only via their dedicated routes.
+    let config = deployment.config().read().await.redacted();
     let login_status = match tokio::time::timeout(
         std::time::Duration::from_secs(2),
         deployment.get_login_status(),
@@ -179,7 +182,7 @@ async fn get_user_system_info(
 
 async fn update_config(
     State(deployment): State<DeploymentImpl>,
-    Json(new_config): Json<Config>,
+    Json(mut new_config): Json<Config>,
 ) -> ResponseJson<ApiResponse<Config>> {
     let config_path = config_path();
 
@@ -193,6 +196,12 @@ async fn update_config(
     // Get old config state before updating
     let old_config = deployment.config().read().await.clone();
 
+    // Linear accounts are managed exclusively via their dedicated routes, never
+    // through this generic config PUT. Preserve the persisted value so a client
+    // that round-trips the (token-redacted) config from `GET /api/info` cannot
+    // blank the stored tokens — nor inject new ones here (ADR 0002).
+    new_config.linear = old_config.linear.clone();
+
     match save_config_to_file(&new_config, &config_path).await {
         Ok(_) => {
             let mut config = deployment.config().write().await;
@@ -202,7 +211,11 @@ async fn update_config(
             // Track config events when fields transition from false → true and run side effects
             handle_config_events(&deployment, &old_config, &new_config).await;
 
-            ResponseJson(ApiResponse::success(new_config))
+            // Persisted + in-memory state keeps the real Linear tokens (restored
+            // above); the response must not — the client treats the returned
+            // Config as its state, so echoing tokens here would leak them on any
+            // config save (ADR 0002).
+            ResponseJson(ApiResponse::success(new_config.redacted()))
         }
         Err(e) => ResponseJson(ApiResponse::error(&format!("Failed to save config: {}", e))),
     }

@@ -185,6 +185,8 @@ fn generate_types_content() -> String {
         services::services::config::EditorType::decl(),
         services::services::config::EditorOpenError::decl(),
         services::services::config::GitHubConfig::decl(),
+        services::services::config::LinearConfig::decl(),
+        services::services::config::LinearAccount::decl(),
         services::services::config::SoundFile::decl(),
         services::services::config::UiLanguage::decl(),
         services::services::config::ShowcaseState::decl(),
