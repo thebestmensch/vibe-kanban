@@ -137,8 +137,17 @@ async fn delete_status(
     State(deployment): State<DeploymentImpl>,
     Path(id): Path<Uuid>,
 ) -> Result<ResponseJson<Value>, ApiError> {
-    ProjectStatuses::delete(&deployment.db().pool, id).await?;
-    Ok(ack())
+    // `issues.status_id` REFERENCES `project_statuses(id)` with no ON DELETE
+    // action, and sqlx enforces foreign keys, so deleting a column that still
+    // has cards fails closed (no orphans). Translate that raw FK error into a
+    // clear 409 instead of an opaque 500.
+    match ProjectStatuses::delete(&deployment.db().pool, id).await {
+        Ok(_) => Ok(ack()),
+        Err(sqlx::Error::Database(e)) if e.is_foreign_key_violation() => Err(ApiError::Conflict(
+            "cannot delete a column that still has cards; move or delete them first".to_string(),
+        )),
+        Err(e) => Err(e.into()),
+    }
 }
 
 async fn bulk_update_statuses(

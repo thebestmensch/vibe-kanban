@@ -84,7 +84,16 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .nest("/api", api_routes)
         // Local board data API (JM-714). Mounted at origin root because the
         // frontend sync layer calls `/v1/*` relative to the current origin.
-        .nest("/v1", board_v1::router().with_state(deployment))
+        // Gated by the same origin check as `/api` so a page on another origin
+        // can't drive the board's mutation routes (CSRF) via the dev port.
+        .nest(
+            "/v1",
+            board_v1::router()
+                .layer(ValidateRequestHeaderLayer::custom(
+                    middleware::validate_origin,
+                ))
+                .with_state(deployment),
+        )
         .layer(CompressionLayer::new())
         .into_make_service()
 }

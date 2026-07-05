@@ -288,8 +288,16 @@ impl IssueRow {
             sort_order: self.sort_order,
             parent_issue_id: self.parent_issue_id,
             parent_issue_sort_order: self.parent_issue_sort_order,
-            extension_metadata: serde_json::from_str(&self.extension_metadata)
-                .unwrap_or_else(|_| serde_json::json!({})),
+            extension_metadata: serde_json::from_str(&self.extension_metadata).unwrap_or_else(
+                |e| {
+                    tracing::warn!(
+                        issue_id = %self.id,
+                        error = %e,
+                        "corrupt extension_metadata TEXT; defaulting to empty object for this read"
+                    );
+                    serde_json::json!({})
+                },
+            ),
             creator_user_id: self.creator_user_id,
             created_at: self.created_at,
             updated_at: self.updated_at,
