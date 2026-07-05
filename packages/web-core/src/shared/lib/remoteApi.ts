@@ -38,11 +38,32 @@ export function setRemoteApiBase(base: string | null | undefined) {
  * Returns the runtime value if set by ConfigProvider, otherwise the build-time default.
  */
 export function getRemoteApiUrl(): string {
+  // JM-714: local board mode talks to the same-origin local `/v1` router, never a
+  // configured cloud/self-host base. Force origin-relative so a packaged local
+  // build (which may set VITE_VK_SHARED_API_BASE, or receive a shared_api_base
+  // from /api/info) can't route board reads/writes to the sunset cloud API.
+  if (_localBoardMode) {
+    return '';
+  }
   return _remoteApiBase;
 }
 
 // Backward-compatible export — consumers should migrate to getRemoteApiUrl()
 export const REMOTE_API_URL = BUILD_TIME_API_BASE;
+
+// JM-714: local-board mode. When set, the sync layer skips Electric shapes
+// (there is no local Electric server) and reads straight from the
+// `/v1/fallback/*` REST snapshot. Set once at local-web bootstrap; stays false
+// in the cloud/remote builds.
+let _localBoardMode = false;
+
+export function setLocalBoardMode(enabled: boolean): void {
+  _localBoardMode = enabled;
+}
+
+export function isLocalBoardMode(): boolean {
+  return _localBoardMode;
+}
 
 export const makeRequest = async (
   path: string,

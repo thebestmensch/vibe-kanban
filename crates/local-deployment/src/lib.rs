@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use api_types::LoginStatus;
+use api_types::{LoginStatus, ProfileResponse};
 use async_trait::async_trait;
 use client_info::ClientInfo;
 use db::DBService;
@@ -404,6 +404,16 @@ impl LocalDeployment {
 
     pub async fn get_login_status(&self) -> LoginStatus {
         if self.auth_context.get_credentials().await.is_none() {
+            // JM-714: the local board runs without cloud OAuth. When
+            // VK_LOCAL_BOARD is set and no real cloud credentials exist, present
+            // a synthetic logged-in identity for the seeded local user so the
+            // board's signed-in gates resolve. Gated by the env var so the
+            // cloud-login path stays intact until v3 strips the cloud stack.
+            if std::env::var("VK_LOCAL_BOARD").is_ok() {
+                return LoginStatus::LoggedIn {
+                    profile: Some(Self::local_board_profile()),
+                };
+            }
             self.auth_context.clear_profile().await;
             self.auth_context.clear_remote_auth_degraded_slug().await;
             return LoginStatus::LoggedOut;
@@ -448,6 +458,18 @@ impl LocalDeployment {
                     .await;
                 LoginStatus::LoggedIn { profile: None }
             }
+        }
+    }
+
+    /// Synthetic profile for the seeded local user (JM-714). `user_id` matches
+    /// `db::LOCAL_USER_ID` / the `X'00…02'` row so `issues.creator_user_id` and
+    /// the rendered current-user identity stay consistent.
+    fn local_board_profile() -> ProfileResponse {
+        ProfileResponse {
+            user_id: db::LOCAL_USER_ID,
+            username: Some("local".to_string()),
+            email: "local@vibe-kanban.local".to_string(),
+            providers: Vec::new(),
         }
     }
 

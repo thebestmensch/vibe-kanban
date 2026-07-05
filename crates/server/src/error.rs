@@ -486,6 +486,9 @@ impl IntoResponse for ApiError {
             ApiError::Container(_) => ErrorInfo::internal("ContainerError"),
             ApiError::Executor(_) => ErrorInfo::internal("ExecutorError"),
             ApiError::CommandBuilder(_) => ErrorInfo::internal("CommandBuildError"),
+            ApiError::Database(sqlx::Error::RowNotFound) => {
+                ErrorInfo::not_found("NotFound", "Resource not found.")
+            }
             ApiError::Database(_) => ErrorInfo::internal("DatabaseError"),
             ApiError::Worktree(err) => ErrorInfo::with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,

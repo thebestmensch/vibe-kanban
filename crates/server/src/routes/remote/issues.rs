@@ -8,6 +8,8 @@ use axum::{
     response::Json as ResponseJson,
     routing::{get, post},
 };
+use db::{LOCAL_USER_ID, models::board::Issues};
+use deployment::Deployment;
 use utils::response::ApiResponse;
 use uuid::Uuid;
 
@@ -27,8 +29,7 @@ async fn list_issues(
     State(deployment): State<DeploymentImpl>,
     Query(query): Query<ListIssuesQuery>,
 ) -> Result<ResponseJson<ApiResponse<ListIssuesResponse>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.list_issues(query.project_id).await?;
+    let response = Issues::list_by_project(&deployment.db().pool, query.project_id).await?;
     Ok(ResponseJson(ApiResponse::success(response)))
 }
 
@@ -36,8 +37,7 @@ async fn search_issues(
     State(deployment): State<DeploymentImpl>,
     Json(request): Json<SearchIssuesRequest>,
 ) -> Result<ResponseJson<ApiResponse<ListIssuesResponse>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.search_issues(&request).await?;
+    let response = Issues::search(&deployment.db().pool, &request).await?;
     Ok(ResponseJson(ApiResponse::success(response)))
 }
 
@@ -45,18 +45,18 @@ async fn get_issue(
     State(deployment): State<DeploymentImpl>,
     Path(issue_id): Path<Uuid>,
 ) -> Result<ResponseJson<ApiResponse<Issue>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.get_issue(issue_id).await?;
-    Ok(ResponseJson(ApiResponse::success(response)))
+    let issue = Issues::get(&deployment.db().pool, issue_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    Ok(ResponseJson(ApiResponse::success(issue)))
 }
 
 async fn create_issue(
     State(deployment): State<DeploymentImpl>,
     Json(request): Json<CreateIssueRequest>,
 ) -> Result<ResponseJson<ApiResponse<MutationResponse<Issue>>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.create_issue(&request).await?;
-    Ok(ResponseJson(ApiResponse::success(response)))
+    let issue = Issues::create(&deployment.db().pool, &request, Some(LOCAL_USER_ID)).await?;
+    Ok(ResponseJson(ApiResponse::success(local_mutation(issue))))
 }
 
 async fn update_issue(
@@ -64,16 +64,21 @@ async fn update_issue(
     Path(issue_id): Path<Uuid>,
     Json(request): Json<UpdateIssueRequest>,
 ) -> Result<ResponseJson<ApiResponse<MutationResponse<Issue>>>, ApiError> {
-    let client = deployment.remote_client()?;
-    let response = client.update_issue(issue_id, &request).await?;
-    Ok(ResponseJson(ApiResponse::success(response)))
+    let issue = Issues::update(&deployment.db().pool, issue_id, &request).await?;
+    Ok(ResponseJson(ApiResponse::success(local_mutation(issue))))
 }
 
 async fn delete_issue(
     State(deployment): State<DeploymentImpl>,
     Path(issue_id): Path<Uuid>,
 ) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
-    let client = deployment.remote_client()?;
-    client.delete_issue(issue_id).await?;
+    Issues::delete(&deployment.db().pool, issue_id).await?;
     Ok(ResponseJson(ApiResponse::success(())))
+}
+
+/// Wrap a persisted entity in the cloud mutation envelope. `txid` is meaningless
+/// locally (single writer, synchronous commit — persistence == this 200), so it's
+/// a fixed 0; the frontend no longer awaits it after the Electric removal.
+fn local_mutation(data: Issue) -> MutationResponse<Issue> {
+    MutationResponse { data, txid: 0 }
 }

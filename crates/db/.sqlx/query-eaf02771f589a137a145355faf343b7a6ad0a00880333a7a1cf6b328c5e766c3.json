@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT issue_prefix as \"issue_prefix!\" FROM organizations WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "issue_prefix!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "eaf02771f589a137a145355faf343b7a6ad0a00880333a7a1cf6b328c5e766c3"
+}

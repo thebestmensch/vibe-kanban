@@ -7,6 +7,7 @@ use tower_http::{compression::CompressionLayer, validate_request::ValidateReques
 use crate::{DeploymentImpl, middleware};
 
 pub mod approvals;
+pub mod board_v1;
 pub mod config;
 pub mod containers;
 pub mod filesystem;
@@ -75,12 +76,24 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
             middleware::validate_origin,
         ))
         .layer(axum::middleware::from_fn(middleware::log_server_errors))
-        .with_state(deployment);
+        .with_state(deployment.clone());
 
     Router::new()
         .route("/", get(frontend::serve_frontend_root))
         .route("/{*path}", get(frontend::serve_frontend))
         .nest("/api", api_routes)
+        // Local board data API (JM-714). Mounted at origin root because the
+        // frontend sync layer calls `/v1/*` relative to the current origin.
+        // Gated by the same origin check as `/api` so a page on another origin
+        // can't drive the board's mutation routes (CSRF) via the dev port.
+        .nest(
+            "/v1",
+            board_v1::router()
+                .layer(ValidateRequestHeaderLayer::custom(
+                    middleware::validate_origin,
+                ))
+                .with_state(deployment),
+        )
         .layer(CompressionLayer::new())
         .into_make_service()
 }
