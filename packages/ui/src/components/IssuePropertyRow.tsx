@@ -35,6 +35,9 @@ export interface IssuePropertyRowProps {
   onPriorityClick: () => void;
   onAssigneeClick: () => void;
   onAddClick?: () => void;
+  /** Hide the assignee control (e.g. local board mode, where assignees are a
+   * single-user no-op and their mutation route is intentionally unbacked). */
+  showAssignee?: boolean;
   disabled?: boolean;
   className?: string;
 }
@@ -52,6 +55,7 @@ export function IssuePropertyRow({
   onPriorityClick,
   onAssigneeClick,
   onAddClick,
+  showAssignee = true,
   disabled,
   className,
 }: IssuePropertyRowProps) {
@@ -79,20 +83,22 @@ export function IssuePropertyRow({
         {priority ? priorityLabels[priority] : 'No priority'}
       </PrimaryButton>
 
-      <PrimaryButton
-        variant="tertiary"
-        onClick={onAssigneeClick}
-        disabled={disabled}
-      >
-        {assigneeUsers && assigneeUsers.length > 0 ? (
-          <KanbanAssignee assignees={assigneeUsers} />
-        ) : (
-          <>
-            <UsersIcon className="size-icon-xs" weight="bold" />
-            {t('kanban.assignee', 'Assignee')}
-          </>
-        )}
-      </PrimaryButton>
+      {showAssignee && (
+        <PrimaryButton
+          variant="tertiary"
+          onClick={onAssigneeClick}
+          disabled={disabled}
+        >
+          {assigneeUsers && assigneeUsers.length > 0 ? (
+            <KanbanAssignee assignees={assigneeUsers} />
+          ) : (
+            <>
+              <UsersIcon className="size-icon-xs" weight="bold" />
+              {t('kanban.assignee', 'Assignee')}
+            </>
+          )}
+        </PrimaryButton>
+      )}
 
       {creatorUser &&
         (creatorUser.first_name?.trim() || creatorUser.username?.trim()) && (

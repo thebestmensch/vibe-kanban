@@ -154,6 +154,11 @@ export interface KanbanIssuePanelProps {
   renderRelationshipsSection?: (issueId: string) => ReactNode;
   renderSubIssuesSection?: (issueId: string) => ReactNode;
   renderCommentsSection?: (issueId: string) => ReactNode;
+
+  /** Show team-oriented card adornments (tags, PR links, assignee,
+   * relationships). Off in local board mode, where these mutation routes are
+   * intentionally unbacked and the affordances would otherwise dead-end. */
+  showAdornments?: boolean;
 }
 
 export function KanbanIssuePanel({
@@ -194,6 +199,7 @@ export function KanbanIssuePanel({
   renderRelationshipsSection,
   renderSubIssuesSection,
   renderCommentsSection,
+  showAdornments = true,
 }: KanbanIssuePanelProps) {
   const { t } = useTranslation('common');
   const isCreateMode = mode === 'create';
@@ -314,23 +320,26 @@ export function KanbanIssuePanel({
             onAssigneeClick={() =>
               onFormChange('assigneeIds', formData.assigneeIds)
             }
+            showAssignee={showAdornments}
             disabled={isSubmitting}
           />
         </div>
 
-        {/* Tags Row */}
-        <div className="px-base py-base border-b">
-          <IssueTagsRow
-            selectedTagIds={formData.tagIds}
-            availableTags={tags}
-            linkedPrs={isCreateMode ? [] : linkedPrs}
-            onTagsChange={(tagIds) => onFormChange('tagIds', tagIds)}
-            onCreateTag={onCreateTag}
-            renderAddTagControl={renderAddTagControl}
-            onLinkPr={!isCreateMode ? onLinkPr : undefined}
-            disabled={isSubmitting}
-          />
-        </div>
+        {/* Tags Row (tags + PR links) — team adornments, hidden in local mode */}
+        {showAdornments && (
+          <div className="px-base py-base border-b">
+            <IssueTagsRow
+              selectedTagIds={formData.tagIds}
+              availableTags={tags}
+              linkedPrs={isCreateMode ? [] : linkedPrs}
+              onTagsChange={(tagIds) => onFormChange('tagIds', tagIds)}
+              onCreateTag={onCreateTag}
+              renderAddTagControl={renderAddTagControl}
+              onLinkPr={!isCreateMode ? onLinkPr : undefined}
+              disabled={isSubmitting}
+            />
+          </div>
+        )}
 
         {/* Title and Description */}
         <div className="rounded-sm">
@@ -528,10 +537,15 @@ export function KanbanIssuePanel({
           <div className="border-t">{renderWorkspacesSection(issueId)}</div>
         )}
 
-        {/* Relationships Section (Edit mode only) */}
-        {!isCreateMode && issueId && renderRelationshipsSection && (
-          <div className="border-t">{renderRelationshipsSection(issueId)}</div>
-        )}
+        {/* Relationships Section (Edit mode only; team adornment) */}
+        {showAdornments &&
+          !isCreateMode &&
+          issueId &&
+          renderRelationshipsSection && (
+            <div className="border-t">
+              {renderRelationshipsSection(issueId)}
+            </div>
+          )}
 
         {/* Sub-Issues Section (Edit mode only) */}
         {!isCreateMode && issueId && renderSubIssuesSection && (

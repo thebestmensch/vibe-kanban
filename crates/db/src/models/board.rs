@@ -8,8 +8,9 @@
 //! one lossy field (`extension_metadata`).
 
 use api_types::{
-    CreateIssueRequest, CreateProjectStatusRequest, Issue, IssuePriority, ListIssuesResponse,
-    Project, ProjectStatus, SearchIssuesRequest, UpdateIssueRequest, UpdateProjectStatusRequest,
+    CreateIssueRequest, CreateProjectRequest, CreateProjectStatusRequest, Issue, IssuePriority,
+    ListIssuesResponse, Project, ProjectStatus, SearchIssuesRequest, UpdateIssueRequest,
+    UpdateProjectRequest, UpdateProjectStatusRequest,
 };
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
@@ -72,6 +73,154 @@ impl BoardProjects {
         .fetch_optional(pool)
         .await
     }
+
+    /// Create a local board (project). Forces `organization_id = LOCAL_ORG_ID`
+    /// (single-org invariant): the board's project list filters by org, so a new
+    /// board must carry the local org to appear — we ignore any client-sent org
+    /// rather than trust the optimistic row. Seeds the default column set in the
+    /// same transaction so a fresh board renders with columns, and appends to the
+    /// end of the org's ordering. `projects` is the original workspace/task table
+    /// (the v1 migration added the board columns), but `git_repo_path` was dropped
+    /// in the repos-registry migration, so a repo-less board row is valid.
+    pub async fn create(
+        pool: &SqlitePool,
+        req: &CreateProjectRequest,
+    ) -> Result<Project, sqlx::Error> {
+        let id = req.id.unwrap_or_else(Uuid::new_v4);
+        let org_id = crate::LOCAL_ORG_ID;
+
+        let mut tx = pool.begin().await?;
+
+        let sort_order = sqlx::query_scalar!(
+            r#"SELECT COALESCE(MAX(sort_order), -1) + 1 as "next!: i32"
+               FROM projects WHERE organization_id = $1"#,
+            org_id
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let project = sqlx::query_as!(
+            Project,
+            r#"INSERT INTO projects (id, name, organization_id, color, sort_order)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id              as "id!: Uuid",
+                         organization_id as "organization_id!: Uuid",
+                         name,
+                         color           as "color!",
+                         sort_order      as "sort_order!: i32",
+                         created_at      as "created_at!: DateTime<Utc>",
+                         updated_at      as "updated_at!: DateTime<Utc>""#,
+            id,
+            req.name,
+            org_id,
+            req.color,
+            sort_order
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        for (idx, (name, color)) in DEFAULT_STATUSES.iter().enumerate() {
+            let sid = Uuid::new_v4();
+            let so = idx as i32;
+            sqlx::query!(
+                r#"INSERT INTO project_statuses (id, project_id, name, color, sort_order, hidden)
+                   VALUES ($1, $2, $3, $4, $5, 0)"#,
+                sid,
+                id,
+                name,
+                color,
+                so
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(project)
+    }
+
+    /// Partial update on a caller-supplied connection so `bulk_update` can batch a
+    /// whole reorder into one transaction (all-or-nothing). Mirrors the fetch-then
+    /// -overwrite idiom used for issues/statuses.
+    async fn update_on(
+        conn: &mut sqlx::SqliteConnection,
+        id: Uuid,
+        req: &UpdateProjectRequest,
+    ) -> Result<Project, sqlx::Error> {
+        let existing = sqlx::query_as!(
+            Project,
+            r#"SELECT id                as "id!: Uuid",
+                      organization_id   as "organization_id!: Uuid",
+                      name,
+                      color             as "color!",
+                      sort_order        as "sort_order!: i32",
+                      created_at        as "created_at!: DateTime<Utc>",
+                      updated_at        as "updated_at!: DateTime<Utc>"
+               FROM projects WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&mut *conn)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+
+        let name = req.name.clone().unwrap_or(existing.name);
+        let color = req.color.clone().unwrap_or(existing.color);
+        let sort_order = req.sort_order.unwrap_or(existing.sort_order);
+
+        sqlx::query_as!(
+            Project,
+            r#"UPDATE projects
+               SET name = $2, color = $3, sort_order = $4,
+                   updated_at = datetime('now', 'subsec')
+               WHERE id = $1
+               RETURNING id              as "id!: Uuid",
+                         organization_id as "organization_id!: Uuid",
+                         name,
+                         color           as "color!",
+                         sort_order      as "sort_order!: i32",
+                         created_at      as "created_at!: DateTime<Utc>",
+                         updated_at      as "updated_at!: DateTime<Utc>""#,
+            id,
+            name,
+            color,
+            sort_order
+        )
+        .fetch_one(&mut *conn)
+        .await
+    }
+
+    /// Partial update of a single board (rename / recolor).
+    pub async fn update(
+        pool: &SqlitePool,
+        id: Uuid,
+        req: &UpdateProjectRequest,
+    ) -> Result<Project, sqlx::Error> {
+        let mut conn = pool.acquire().await?;
+        Self::update_on(&mut conn, id, req).await
+    }
+
+    /// Apply several board updates atomically (drag-reorder sends the whole batch
+    /// as one optimistic operation; a mid-batch failure must roll back).
+    pub async fn bulk_update(
+        pool: &SqlitePool,
+        updates: &[(Uuid, UpdateProjectRequest)],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        for (id, req) in updates {
+            Self::update_on(&mut tx, *id, req).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    // NOTE: no board delete. `projects` is the shared workspace/task table — its
+    // `id` is referenced with ON DELETE CASCADE by legacy local subsystems
+    // (`tasks`, `task_attempts`, `project_repos`, …), and the v1 migration
+    // backfilled `organization_id` onto every existing project, so a workspace
+    // project also appears on the board. A plain `DELETE FROM projects` would
+    // erase far more than the board's cards/columns, beyond what a "delete board"
+    // action implies. Safe board removal needs a board/workspace split or a
+    // soft-delete/archive — deferred to a follow-up (see JM-732 review notes).
 }
 
 // ---------------------------------------------------------------------------
