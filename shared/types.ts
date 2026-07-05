@@ -314,6 +314,8 @@ identifier: string, };
 
 export type IssueLinkView = { linear_issue_id: string, linear_issue_identifier: string, linear_url: string, linear_state_id: string | null, };
 
+export type LinkedIssueView = { issue_id: string, linear_issue_identifier: string, linear_url: string, linear_sync_pending: boolean, };
+
 export type CurrentUserResponse = { user_id: string, };
 
 export type StartSpake2EnrollmentRequest = { enrollment_code: string, client_message_b64: string, };

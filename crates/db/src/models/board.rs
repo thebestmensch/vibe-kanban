@@ -878,9 +878,34 @@ impl Issues {
     }
 
     // --- Outbound Linear mirror (JM-718) -----------------------------------
-    // These four methods are the sync loop's exclusive write path. None routes
-    // through `update_on`, so none can (re)set `linear_sync_pending = 1` — that
-    // flag is set only by the user-driven mutation hook above (echo invariant).
+    // These methods are the sync loop's exclusive write path plus one read
+    // projection for the board badge. None routes through `update_on`, so none
+    // can (re)set `linear_sync_pending = 1` — that flag is set only by the
+    // user-driven mutation hook above (echo invariant).
+
+    /// Read the Linear link projection for a project's linked cards (JM-718
+    /// slice 5). A local-only board read — deliberately NOT folded onto the
+    /// shared `api_types::Issue`, which the cloud `crates/remote` Postgres repo
+    /// also uses (its schema has no `linear_*` columns). The badge merges this by
+    /// `issue_id` on the frontend. Identifier/url are non-null because
+    /// `link_linear` writes all link fields together.
+    pub async fn list_linear_links(
+        pool: &SqlitePool,
+        project_id: Uuid,
+    ) -> Result<Vec<LinearLinkRow>, sqlx::Error> {
+        sqlx::query_as!(
+            LinearLinkRow,
+            r#"SELECT id                      as "issue_id!: Uuid",
+                      linear_issue_identifier as "linear_issue_identifier!",
+                      linear_url              as "linear_url!",
+                      linear_sync_pending     as "linear_sync_pending!: i64"
+               FROM issues
+               WHERE project_id = $1 AND linear_issue_id IS NOT NULL"#,
+            project_id
+        )
+        .fetch_all(pool)
+        .await
+    }
 
     /// Drain the cards flagged for an outbound Linear status push, joined with
     /// their project's bound account key. The `WHERE` guarantees every row has a
@@ -1009,6 +1034,17 @@ impl Issues {
         .await?;
         Ok(())
     }
+}
+
+/// One linked card's Linear projection for the board badge. Produced by
+/// [`Issues::list_linear_links`].
+#[derive(Debug, Clone)]
+pub struct LinearLinkRow {
+    pub issue_id: Uuid,
+    pub linear_issue_identifier: String,
+    pub linear_url: String,
+    /// `1` while a status change is queued for an outbound push.
+    pub linear_sync_pending: i64,
 }
 
 /// A card flagged for an outbound Linear status push, joined with its project's

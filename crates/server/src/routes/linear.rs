@@ -39,6 +39,7 @@ pub fn router() -> Router<DeploymentImpl> {
             get(list_workflow_states),
         )
         .route("/linear/projects/{id}/account", put(bind_project))
+        .route("/linear/projects/{id}/links", get(list_project_links))
         .route(
             "/linear/issues/{id}/link",
             post(link_issue).delete(unlink_issue),
@@ -110,6 +111,17 @@ pub struct IssueLinkView {
     pub linear_issue_identifier: String,
     pub linear_url: String,
     pub linear_state_id: Option<String>,
+}
+
+/// A linked card's badge projection, keyed by `issue_id` so the board can merge
+/// it onto the card. Local-only — kept off the shared `api_types::Issue` (which
+/// the cloud remote repo also uses) per ADR 0002 / the JM-718 slice-5 review.
+#[derive(Debug, Serialize, TS)]
+pub struct LinkedIssueView {
+    pub issue_id: String,
+    pub linear_issue_identifier: String,
+    pub linear_url: String,
+    pub linear_sync_pending: bool,
 }
 
 // --- Config persistence -----------------------------------------------------
@@ -297,6 +309,25 @@ async fn bind_project(
     }
     BoardProjects::set_linear_account_key(&deployment.db().pool, id, body.account_key).await?;
     Ok(ResponseJson(ApiResponse::success(())))
+}
+
+/// List the Linear-link projections for a project's linked cards, for the board
+/// badge. `id` is the project id.
+async fn list_project_links(
+    State(deployment): State<DeploymentImpl>,
+    Path(id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<Vec<LinkedIssueView>>>, ApiError> {
+    let rows = Issues::list_linear_links(&deployment.db().pool, id).await?;
+    let views = rows
+        .into_iter()
+        .map(|r| LinkedIssueView {
+            issue_id: r.issue_id.to_string(),
+            linear_issue_identifier: r.linear_issue_identifier,
+            linear_url: r.linear_url,
+            linear_sync_pending: r.linear_sync_pending != 0,
+        })
+        .collect();
+    Ok(ResponseJson(ApiResponse::success(views)))
 }
 
 // --- Manual link ------------------------------------------------------------

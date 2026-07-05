@@ -100,6 +100,14 @@ import {
   OpenRemoteWorkspaceInEditorRequest,
   OpenRemoteEditorResponse,
   ProfileResponse,
+  LinearAccountView,
+  ConnectLinearAccountBody,
+  SetStateMapBody,
+  LinearWorkflowStateView,
+  BindProjectBody,
+  LinkIssueBody,
+  IssueLinkView,
+  LinkedIssueView,
 } from 'shared/types';
 import type { Project as RemoteProject } from 'shared/remote-types';
 import type { WorkspaceWithSession } from '@/shared/types/attempt';
@@ -1697,5 +1705,80 @@ export const searchApi = {
       options
     );
     return handleApiResponse<SearchResult[]>(response);
+  },
+};
+
+// Linear integration API (JM-718). Account credentials never come back over the
+// wire — `LinearAccountView.has_token` is the only token signal.
+export const linearApi = {
+  listAccounts: async (): Promise<LinearAccountView[]> => {
+    const response = await makeRequest('/api/linear/accounts');
+    return handleApiResponse<LinearAccountView[]>(response);
+  },
+  connectAccount: async (
+    body: ConnectLinearAccountBody
+  ): Promise<LinearAccountView> => {
+    const response = await makeRequest('/api/linear/accounts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return handleApiResponse<LinearAccountView>(response);
+  },
+  deleteAccount: async (key: string): Promise<void> => {
+    const response = await makeRequest(
+      `/api/linear/accounts/${encodeURIComponent(key)}`,
+      { method: 'DELETE' }
+    );
+    return handleApiResponse<void>(response);
+  },
+  setStateMap: async (
+    key: string,
+    body: SetStateMapBody
+  ): Promise<LinearAccountView> => {
+    const response = await makeRequest(
+      `/api/linear/accounts/${encodeURIComponent(key)}/state-map`,
+      { method: 'PUT', body: JSON.stringify(body) }
+    );
+    return handleApiResponse<LinearAccountView>(response);
+  },
+  getWorkflowStates: async (
+    key: string
+  ): Promise<LinearWorkflowStateView[]> => {
+    const response = await makeRequest(
+      `/api/linear/accounts/${encodeURIComponent(key)}/workflow-states`
+    );
+    return handleApiResponse<LinearWorkflowStateView[]>(response);
+  },
+  bindProject: async (
+    projectId: string,
+    body: BindProjectBody
+  ): Promise<void> => {
+    const response = await makeRequest(
+      `/api/linear/projects/${projectId}/account`,
+      { method: 'PUT', body: JSON.stringify(body) }
+    );
+    return handleApiResponse<void>(response);
+  },
+  listProjectLinks: async (projectId: string): Promise<LinkedIssueView[]> => {
+    const response = await makeRequest(
+      `/api/linear/projects/${projectId}/links`
+    );
+    return handleApiResponse<LinkedIssueView[]>(response);
+  },
+  linkIssue: async (
+    issueId: string,
+    body: LinkIssueBody
+  ): Promise<IssueLinkView> => {
+    const response = await makeRequest(`/api/linear/issues/${issueId}/link`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return handleApiResponse<IssueLinkView>(response);
+  },
+  unlinkIssue: async (issueId: string): Promise<void> => {
+    const response = await makeRequest(`/api/linear/issues/${issueId}/link`, {
+      method: 'DELETE',
+    });
+    return handleApiResponse<void>(response);
   },
 };

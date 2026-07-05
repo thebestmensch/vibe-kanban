@@ -14,6 +14,7 @@ import { KanbanBadge } from './KanbanBadge';
 import { KanbanAssignee, type KanbanAssigneeUser } from './KanbanAssignee';
 import { RunningDots } from './RunningDots';
 import { PrBadge, type PrBadgeStatus } from './PrBadge';
+import { LinearBadge } from './LinearBadge';
 import {
   RelationshipBadge,
   type RelationshipDisplayType,
@@ -36,6 +37,12 @@ export interface KanbanPullRequest {
   number: number;
   url: string;
   status: PrBadgeStatus;
+}
+
+export interface KanbanLinearLink {
+  identifier: string;
+  url: string;
+  syncPending?: boolean;
 }
 
 export interface TagEditRenderProps<TTag extends KanbanTag = KanbanTag> {
@@ -130,6 +137,7 @@ export type KanbanCardContentProps<TTag extends KanbanTag = KanbanTag> = {
   assignees: KanbanAssigneeUser[];
   pullRequests?: KanbanPullRequest[];
   relationships?: KanbanRelationship[];
+  linearLink?: KanbanLinearLink | null;
   isSubIssue?: boolean;
   isLoading?: boolean;
   className?: string;
@@ -149,6 +157,7 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
   assignees,
   pullRequests = [],
   relationships = [],
+  linearLink,
   isSubIssue,
   isLoading = false,
   className,
@@ -294,7 +303,8 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
       {(tags.length > 0 ||
         tagEditProps ||
         pullRequests.length > 0 ||
-        relationships.length > 0) && (
+        relationships.length > 0 ||
+        linearLink) && (
         <div className="flex items-center gap-half flex-wrap min-w-0">
           {tagEditProps ? (
             (tagEditProps.renderTagEditor?.({
@@ -324,6 +334,13 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
           ))}
           {pullRequests.length > 2 && (
             <span className="text-sm text-low">+{pullRequests.length - 2}</span>
+          )}
+          {linearLink && (
+            <LinearBadge
+              identifier={linearLink.identifier}
+              url={linearLink.url}
+              syncPending={linearLink.syncPending}
+            />
           )}
           {relationships.slice(0, 2).map((rel) => (
             <RelationshipBadge

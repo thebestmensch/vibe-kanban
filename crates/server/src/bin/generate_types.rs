@@ -109,6 +109,7 @@ fn generate_types_content() -> String {
         server::routes::linear::BindProjectBody::decl(),
         server::routes::linear::LinkIssueBody::decl(),
         server::routes::linear::IssueLinkView::decl(),
+        server::routes::linear::LinkedIssueView::decl(),
         server::routes::oauth::CurrentUserResponse::decl(),
         relay_types::StartSpake2EnrollmentRequest::decl(),
         relay_types::FinishSpake2EnrollmentRequest::decl(),
