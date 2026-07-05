@@ -4,6 +4,7 @@ import { getFirstProjectDestination } from '@/shared/lib/firstProjectDestination
 import { useOrganizationStore } from '@/shared/stores/useOrganizationStore';
 import { useUiPreferencesStore } from '@/shared/stores/useUiPreferencesStore';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
+import { isLocalBoardMode } from '@/shared/lib/remoteApi';
 
 export function RootRedirectPage() {
   const { config, loading, loginStatus } = useUserSystem();
@@ -17,12 +18,17 @@ export function RootRedirectPage() {
 
     let isActive = true;
     void (async () => {
-      if (!config.remote_onboarding_acknowledged) {
+      // Local board mode has no cloud onboarding or login: the backend
+      // synthesizes a logged-in local identity, so skip those gates (they route
+      // to the sunset cloud flows) and land straight on the first board.
+      const localBoard = isLocalBoardMode();
+
+      if (!localBoard && !config.remote_onboarding_acknowledged) {
         appNavigation.goToOnboarding({ replace: true });
         return;
       }
 
-      if (loginStatus?.status !== 'loggedin') {
+      if (!localBoard && loginStatus?.status !== 'loggedin') {
         appNavigation.goToWorkspacesCreate({ replace: true });
         return;
       }

@@ -15,7 +15,8 @@
 //! the client-generated `id` for stable optimistic reconciliation.
 
 use api_types::{
-    CreateIssueRequest, CreateProjectStatusRequest, UpdateIssueRequest, UpdateProjectStatusRequest,
+    CreateIssueRequest, CreateProjectRequest, CreateProjectStatusRequest, UpdateIssueRequest,
+    UpdateProjectRequest, UpdateProjectStatusRequest,
 };
 use axum::{
     Router,
@@ -25,7 +26,7 @@ use axum::{
 };
 use db::{
     LOCAL_USER_ID,
-    models::board::{Issues, ProjectStatuses},
+    models::board::{BoardProjects, Issues, ProjectStatuses},
 };
 use deployment::Deployment;
 use serde::Deserialize;
@@ -45,6 +46,12 @@ pub(super) fn router() -> Router<DeploymentImpl> {
             "/project_statuses/{id}",
             patch(update_status).delete(delete_status),
         )
+        .route("/projects", post(create_project))
+        .route("/projects/bulk", post(bulk_update_projects))
+        // No DELETE: `projects` is the shared workspace/task table, so a plain
+        // delete cascades into legacy task/repo data beyond the board. See
+        // `BoardProjects` (db) for the deferral rationale.
+        .route("/projects/{id}", patch(update_project))
 }
 
 /// The mutation ack. `txid` is meaningless locally (single writer, synchronous
@@ -160,5 +167,37 @@ async fn bulk_update_statuses(
         .map(split_bulk_item::<UpdateProjectStatusRequest>)
         .collect::<Result<Vec<_>, _>>()?;
     ProjectStatuses::bulk_update(&deployment.db().pool, &updates).await?;
+    Ok(ack())
+}
+
+// --- Projects (boards) ------------------------------------------------------
+
+async fn create_project(
+    State(deployment): State<DeploymentImpl>,
+    Json(request): Json<CreateProjectRequest>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    BoardProjects::create(&deployment.db().pool, &request).await?;
+    Ok(ack())
+}
+
+async fn update_project(
+    State(deployment): State<DeploymentImpl>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<UpdateProjectRequest>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    BoardProjects::update(&deployment.db().pool, id, &request).await?;
+    Ok(ack())
+}
+
+async fn bulk_update_projects(
+    State(deployment): State<DeploymentImpl>,
+    Json(body): Json<BulkBody>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let updates = body
+        .updates
+        .into_iter()
+        .map(split_bulk_item::<UpdateProjectRequest>)
+        .collect::<Result<Vec<_>, _>>()?;
+    BoardProjects::bulk_update(&deployment.db().pool, &updates).await?;
     Ok(ack())
 }

@@ -46,6 +46,7 @@ import { useAzureAttachments } from '@/shared/hooks/useAzureAttachments';
 import {
   commitIssueAttachments,
   deleteAttachment,
+  isLocalBoardMode,
 } from '@/shared/lib/remoteApi';
 import {
   extractAttachmentIds,
@@ -1041,6 +1042,7 @@ export function KanbanIssuePanelContainer({
   return (
     <KanbanIssuePanel
       mode={mode}
+      showAdornments={!isLocalBoardMode()}
       displayId={displayId}
       formData={displayData}
       assigneeUsers={displayAssigneeUsers}

@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects\n               SET name = $2, color = $3, sort_order = $4,\n                   updated_at = datetime('now', 'subsec')\n               WHERE id = $1\n               RETURNING id              as \"id!: Uuid\",\n                         organization_id as \"organization_id!: Uuid\",\n                         name,\n                         color           as \"color!\",\n                         sort_order      as \"sort_order!: i32\",\n                         created_at      as \"created_at!: DateTime<Utc>\",\n                         updated_at      as \"updated_at!: DateTime<Utc>\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "organization_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "color!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "sort_order!: i32",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "27ccdd5be67162e7813c1aefb1da3703d80cba8a524285b0a807a5cf77dffc57"
+}
