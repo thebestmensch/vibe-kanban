@@ -4939,6 +4939,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "linear"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
