@@ -97,6 +97,9 @@ async fn update_issue(
     Json(request): Json<UpdateIssueRequest>,
 ) -> Result<ResponseJson<Value>, ApiError> {
     Issues::update(&deployment.db().pool, id, &request).await?;
+    // Latency-only nudge; the durable `linear_sync_pending` flag (set in the
+    // model when a linked card's column changed) is the source of truth.
+    deployment.trigger_linear_sync();
     Ok(ack())
 }
 
@@ -118,6 +121,8 @@ async fn bulk_update_issues(
         .map(split_bulk_item::<UpdateIssueRequest>)
         .collect::<Result<Vec<_>, _>>()?;
     Issues::bulk_update(&deployment.db().pool, &updates).await?;
+    // Drag-drop reorder path — same latency-only nudge as the single update.
+    deployment.trigger_linear_sync();
     Ok(ack())
 }
 

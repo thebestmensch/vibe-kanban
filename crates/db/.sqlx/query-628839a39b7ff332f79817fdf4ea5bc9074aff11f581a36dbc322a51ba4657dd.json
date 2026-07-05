@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE issues SET linear_sync_pending = 0 WHERE id = $1 AND status_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "628839a39b7ff332f79817fdf4ea5bc9074aff11f581a36dbc322a51ba4657dd"
+}

@@ -15,6 +15,7 @@ relay-types = { path = "../relay-types" }
 utils = { path = "../utils" }
 git = { path = "../git" }
 git-host = { path = "../git-host" }
+linear = { path = "../linear" }
 executors = { path = "../executors" }
 db = { path = "../db" }
 worktree-manager = { path = "../worktree-manager" }

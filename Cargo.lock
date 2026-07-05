@@ -8965,6 +8965,7 @@ dependencies = [
  "ignore",
  "indicatif",
  "json-patch 2.0.0",
+ "linear",
  "mime_guess",
  "moka",
  "notify",

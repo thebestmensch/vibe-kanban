@@ -25,6 +25,7 @@ use services::services::{
     file::FileService,
     file_search::FileSearchCache,
     filesystem::FilesystemService,
+    linear_monitor::LinearMonitorService,
     oauth_credentials::OAuthCredentials,
     pr_monitor::PrMonitorService,
     queued_message::QueuedMessageService,
@@ -79,6 +80,7 @@ pub struct LocalDeployment {
     ssh_config: Arc<russh::server::Config>,
     pty: PtyService,
     pr_sync_notify: Arc<Notify>,
+    linear_sync_notify: Arc<Notify>,
 }
 
 #[derive(Debug, Clone)]
@@ -263,6 +265,9 @@ impl Deployment for LocalDeployment {
             PrMonitorService::spawn(db, analytics, container, rc, pr_sync_notify.clone()).await;
         }
 
+        let linear_sync_notify = Arc::new(Notify::new());
+        LinearMonitorService::spawn(db.clone(), config.clone(), linear_sync_notify.clone()).await;
+
         let deployment = Self {
             config,
             user_id,
@@ -293,6 +298,7 @@ impl Deployment for LocalDeployment {
             ssh_config,
             pty,
             pr_sync_notify,
+            linear_sync_notify,
         };
 
         Ok(deployment)
@@ -506,5 +512,13 @@ impl LocalDeployment {
 
     pub fn trigger_pr_sync(&self) {
         self.pr_sync_notify.notify_one();
+    }
+
+    /// Nudge the outbound Linear sync loop to drain immediately instead of
+    /// waiting for the next 60s tick. Correctness does not depend on this — the
+    /// durable `linear_sync_pending` flag is the source of truth — so a missed
+    /// nudge only delays a push, it never drops one.
+    pub fn trigger_linear_sync(&self) {
+        self.linear_sync_notify.notify_one();
     }
 }
