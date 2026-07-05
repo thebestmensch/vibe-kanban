@@ -15,6 +15,7 @@ local-deployment = { path = "../local-deployment" }
 utils = { path = "../utils" }
 git = { path = "../git" }
 git-host = { path = "../git-host" }
+linear = { path = "../linear" }
 db = { path = "../db" }
 services = { path = "../services" }
 worktree-manager = { path = "../worktree-manager" }

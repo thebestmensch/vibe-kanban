@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET linear_account_key = $2 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "13c190212506f979a4f49494f3b7a904ca9ac66937a062488ab70f764d1a7c50"
+}

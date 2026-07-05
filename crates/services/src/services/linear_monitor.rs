@@ -168,17 +168,19 @@ impl LinearMonitorService {
             Err(e) if e.should_retry() => {
                 warn!(issue = %id, "transient Linear error; leaving pending for next tick: {e}");
             }
-            Err(e @ (LinearError::AuthFailed(_) | LinearError::UnknownAccount(_))) => {
-                // Config-fixable — do NOT clear, or a bad token silently drops
-                // the sync. Recovers on the next tick once creds are corrected.
-                warn!(issue = %id, "Linear auth/account error; leaving pending until fixed: {e}");
-            }
             Err(e) => {
-                // Api | Malformed — deterministic; clear so it stops spinning.
-                error!(issue = %id, "permanent Linear error; clearing pending (won't retry): {e}");
-                if let Err(e) = Issues::clear_linear_pending(&self.db.pool, id, status_id).await {
-                    error!(issue = %id, "failed to clear Linear pending flag: {e}");
-                }
+                // Everything else — auth, unknown-account, `Api` (e.g. an invalid
+                // or since-deleted mapped state id), `Malformed` — is left
+                // pending, NOT cleared. Clearing a *failed* push would silently
+                // drop the sync: the move would look processed while Linear never
+                // received it (a state-map typo is the common trigger). Leaving
+                // it means the card stays visibly un-synced (drift badge + logs)
+                // and recovers once the mapping/creds are fixed. Only a *success*
+                // clears pending; only a Linear-side deletion (NotFound) unlinks.
+                warn!(
+                    issue = %id,
+                    "Linear push failed; leaving pending until config/creds fixed: {e}"
+                );
             }
         }
     }

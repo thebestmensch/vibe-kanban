@@ -213,6 +213,38 @@ impl BoardProjects {
         Ok(())
     }
 
+    /// Read a project's bound Linear account key (JM-718). `None` = unbound (or
+    /// the project does not exist — callers that need that distinction check the
+    /// issue/project first).
+    pub async fn linear_account_key(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"SELECT linear_account_key FROM projects WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.and_then(|r| r.linear_account_key))
+    }
+
+    /// Bind (or unbind, with `None`) a project to a Linear account key (JM-718).
+    pub async fn set_linear_account_key(
+        pool: &SqlitePool,
+        id: Uuid,
+        key: Option<String>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE projects SET linear_account_key = $2 WHERE id = $1"#,
+            id,
+            key
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     // NOTE: no board delete. `projects` is the shared workspace/task table — its
     // `id` is referenced with ON DELETE CASCADE by legacy local subsystems
     // (`tasks`, `task_attempts`, `project_repos`, …), and the v1 migration
@@ -914,6 +946,45 @@ impl Issues {
             r#"UPDATE issues SET linear_sync_pending = 0 WHERE id = $1 AND status_id = $2"#,
             id,
             expected_status_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Establish a manual card↔issue link (JM-718 slice 4). `linear_state_id`
+    /// seeds the drift baseline (the issue's *current* Linear state at link
+    /// time). `sync_pending` reconciles board-wins on link: if the card already
+    /// sits in a mapped column whose target differs from the issue's current
+    /// state, the caller passes `true` so the outbound loop pushes the board's
+    /// state — otherwise the link would leave the board and Linear diverged with
+    /// nothing queued (ADR 0002 board-wins). The partial `UNIQUE INDEX` on
+    /// `linear_issue_id` is the backstop against linking one issue to two cards;
+    /// a violation surfaces as a unique-constraint error the route maps to 409.
+    pub async fn link_linear(
+        pool: &SqlitePool,
+        id: Uuid,
+        linear_issue_id: &str,
+        linear_issue_identifier: &str,
+        linear_url: &str,
+        linear_state_id: Option<&str>,
+        sync_pending: bool,
+    ) -> Result<(), sqlx::Error> {
+        let pending = i64::from(sync_pending);
+        sqlx::query!(
+            r#"UPDATE issues
+               SET linear_issue_id = $2,
+                   linear_issue_identifier = $3,
+                   linear_url = $4,
+                   linear_state_id = $5,
+                   linear_sync_pending = $6
+               WHERE id = $1"#,
+            id,
+            linear_issue_id,
+            linear_issue_identifier,
+            linear_url,
+            linear_state_id,
+            pending
         )
         .execute(pool)
         .await?;

@@ -288,6 +288,32 @@ export type CheckAgentAvailabilityQuery = { executor: BaseCodingAgent, };
 
 export type AgentPresetOptionsQuery = { executor: BaseCodingAgent, variant: string | null, };
 
+export type LinearAccountView = { key: string, workspace_name: string | null, team_id: string | null, has_token: boolean, state_map: { [key in string]?: string }, };
+
+export type ConnectLinearAccountBody = { key: string, token: string, workspace_name: string | null, team_id: string | null, };
+
+export type SetStateMapBody = { 
+/**
+ * `project_statuses.id` (UUID string) → Linear workflow-state id.
+ */
+state_map: { [key in string]?: string }, };
+
+export type LinearWorkflowStateView = { id: string, name: string, state_type: string, position: number, };
+
+export type BindProjectBody = { 
+/**
+ * `None` unbinds the project.
+ */
+account_key: string | null, };
+
+export type LinkIssueBody = { 
+/**
+ * Team-key identifier, e.g. `OOM-123`.
+ */
+identifier: string, };
+
+export type IssueLinkView = { linear_issue_id: string, linear_issue_identifier: string, linear_url: string, linear_state_id: string | null, };
+
 export type CurrentUserResponse = { user_id: string, };
 
 export type StartSpake2EnrollmentRequest = { enrollment_code: string, client_message_b64: string, };
