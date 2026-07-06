@@ -11,8 +11,8 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use db::models::merge::MergeStatus;
-use serde::Deserialize;
+use db::models::merge::{CheckStatus, MergeStatus};
+use serde::{Deserialize, Deserializer};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use url::Url;
@@ -100,6 +100,111 @@ struct GhMergeCommit {
     oid: Option<String>,
 }
 
+/// One element of GitHub's `statusCheckRollup` array. The array is heterogeneous:
+/// `CheckRun` elements (GitHub Actions / Checks API) carry `status` + `conclusion`,
+/// while `StatusContext` elements (legacy commit statuses, e.g. CodeRabbit) carry
+/// only `state`. Discriminating on `__typename` is required — a single struct with
+/// optional `state`/`conclusion` would silently read every mismatched element as
+/// absent, producing false-green rollups.
+#[derive(Deserialize)]
+#[serde(tag = "__typename")]
+enum GhCheckElement {
+    CheckRun {
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        conclusion: Option<String>,
+    },
+    StatusContext {
+        #[serde(default)]
+        state: Option<String>,
+    },
+    /// Any future/unrecognized rollup element type. Treated as neutral so a new
+    /// GitHub typename can never be misread as a hard failure or pass.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Per-element classification, reduced across the rollup by `rollup_check_status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ElementClass {
+    Failing,
+    Pending,
+    Passing,
+    /// Intentionally-not-run (skipped/neutral/stale-context) — ignored in the reduce.
+    Neutral,
+}
+
+fn classify_element(el: &GhCheckElement) -> ElementClass {
+    match el {
+        GhCheckElement::CheckRun { status, conclusion } => {
+            let status = status.as_deref().unwrap_or("").to_ascii_uppercase();
+            // Anything not COMPLETED is still running/queued → pending.
+            if status != "COMPLETED" {
+                return ElementClass::Pending;
+            }
+            match conclusion
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_uppercase()
+                .as_str()
+            {
+                "SUCCESS" => ElementClass::Passing,
+                "FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
+                | "STALE" => ElementClass::Failing,
+                "SKIPPED" | "NEUTRAL" => ElementClass::Neutral,
+                // COMPLETED with a missing/unknown conclusion — don't guess green.
+                _ => ElementClass::Pending,
+            }
+        }
+        GhCheckElement::StatusContext { state } => {
+            match state.as_deref().unwrap_or("").to_ascii_uppercase().as_str() {
+                "SUCCESS" => ElementClass::Passing,
+                "FAILURE" | "ERROR" => ElementClass::Failing,
+                "PENDING" | "EXPECTED" => ElementClass::Pending,
+                _ => ElementClass::Neutral,
+            }
+        }
+        GhCheckElement::Unknown => ElementClass::Neutral,
+    }
+}
+
+/// Reduce a `statusCheckRollup` array to a single [`CheckStatus`].
+///
+/// Precedence: any failing → `Failing`; else any pending → `Pending`; else any
+/// passing → `Passing`; else `NoChecks` (empty rollup, or only skipped/neutral
+/// elements). Failing dominates so a red required check is never masked by a
+/// later success.
+fn rollup_check_status(elements: &[GhCheckElement]) -> CheckStatus {
+    let mut any_pending = false;
+    let mut any_passing = false;
+    for el in elements {
+        match classify_element(el) {
+            ElementClass::Failing => return CheckStatus::Failing,
+            ElementClass::Pending => any_pending = true,
+            ElementClass::Passing => any_passing = true,
+            ElementClass::Neutral => {}
+        }
+    }
+    if any_pending {
+        CheckStatus::Pending
+    } else if any_passing {
+        CheckStatus::Passing
+    } else {
+        CheckStatus::NoChecks
+    }
+}
+
+/// Deserialize helper: treat a JSON `null` as `T::default()`. `#[serde(default)]`
+/// alone only handles a *missing* key, not an explicit `null`.
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPrResponse {
@@ -117,6 +222,13 @@ struct GhPrResponse {
     head_ref_name: Option<String>,
     #[serde(default)]
     updated_at: Option<DateTime<Utc>>,
+    // GitHub returns `statusCheckRollup: null` (not `[]`) for a commit with no
+    // checks, and `#[serde(default)]` only covers a *missing* field — a present
+    // `null` would fail to deserialize into `Vec`. Coerce `null` → empty.
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    status_check_rollup: Vec<GhCheckElement>,
+    #[serde(default)]
+    merge_state_status: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -268,7 +380,7 @@ impl GhCli {
                 "view",
                 pr_url,
                 "--json",
-                "number,url,state,mergedAt,mergeCommit,title,baseRefName,headRefName",
+                "number,url,state,mergedAt,mergeCommit,title,baseRefName,headRefName,statusCheckRollup,mergeStateStatus",
             ],
             None,
         )?;
@@ -293,7 +405,7 @@ impl GhCli {
                 "--head",
                 branch,
                 "--json",
-                "number,url,title,headRefName,baseRefName,state,mergedAt,mergeCommit",
+                "number,url,title,headRefName,baseRefName,state,mergedAt,mergeCommit,statusCheckRollup,mergeStateStatus",
             ],
             None,
         )?;
@@ -302,8 +414,7 @@ impl GhCli {
 
     pub fn list_prs(&self, owner: &str, repo: &str) -> Result<Vec<PullRequestDetail>, GhCliError> {
         let repo_spec = format!("{owner}/{repo}");
-        let json_fields =
-            "number,url,title,headRefName,baseRefName,state,mergedAt,mergeCommit,updatedAt";
+        let json_fields = "number,url,title,headRefName,baseRefName,state,mergedAt,mergeCommit,updatedAt,statusCheckRollup,mergeStateStatus";
 
         let open_raw = self.run(
             [
@@ -466,6 +577,9 @@ impl GhCli {
             title: request.title.clone(),
             base_branch: request.base_branch.clone(),
             head_branch: request.head_branch.clone(),
+            // A freshly-created PR has no rollup yet; the 60s poll fills this in.
+            check_status: None,
+            merge_state: None,
         })
     }
 
@@ -493,20 +607,28 @@ impl GhCli {
         } else {
             &pr.state
         };
+        let status = match state.to_ascii_uppercase().as_str() {
+            "OPEN" => MergeStatus::Open,
+            "MERGED" => MergeStatus::Merged,
+            "CLOSED" => MergeStatus::Closed,
+            _ => MergeStatus::Unknown,
+        };
+        // CI-check status is only meaningful while the PR is open (the review
+        // loop). Once merged/closed the rollup is frozen/irrelevant, so leave it
+        // absent rather than persist a stale terminal value.
+        let check_status = matches!(status, MergeStatus::Open)
+            .then(|| rollup_check_status(&pr.status_check_rollup));
         PullRequestDetail {
             number: pr.number,
             url: pr.url,
-            status: match state.to_ascii_uppercase().as_str() {
-                "OPEN" => MergeStatus::Open,
-                "MERGED" => MergeStatus::Merged,
-                "CLOSED" => MergeStatus::Closed,
-                _ => MergeStatus::Unknown,
-            },
+            status,
             merged_at: pr.merged_at,
             merge_commit_sha: pr.merge_commit.and_then(|c| c.oid),
             title: pr.title.unwrap_or_default(),
             base_branch: pr.base_ref_name.unwrap_or_default(),
             head_branch: pr.head_ref_name.unwrap_or_default(),
+            check_status,
+            merge_state: pr.merge_state_status,
         }
     }
 
@@ -564,5 +686,186 @@ impl GhCli {
                 author_association: c.author_association,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_rollup(json: &str) -> Vec<GhCheckElement> {
+        serde_json::from_str(json).expect("rollup fixture should deserialize")
+    }
+
+    #[test]
+    fn empty_rollup_is_no_checks() {
+        assert_eq!(rollup_check_status(&[]), CheckStatus::NoChecks);
+    }
+
+    #[test]
+    fn null_rollup_deserializes_as_empty() {
+        // GitHub returns `statusCheckRollup: null` for a checkless commit; the
+        // whole PR response must still parse (regression guard for the
+        // deserialize_null_default helper), yielding an empty rollup.
+        let resp: GhPrResponse = serde_json::from_str(
+            r#"{"number":1,"url":"https://example.com/pr/1","statusCheckRollup":null}"#,
+        )
+        .expect("null statusCheckRollup should not break PR parsing");
+        assert!(resp.status_check_rollup.is_empty());
+        assert_eq!(
+            rollup_check_status(&resp.status_check_rollup),
+            CheckStatus::NoChecks
+        );
+    }
+
+    #[test]
+    fn status_context_states_classify() {
+        // StatusContext carries `state`, no `conclusion`.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"StatusContext","context":"CodeRabbit","state":"SUCCESS"}]"#
+            )),
+            CheckStatus::Passing
+        );
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"StatusContext","context":"ci","state":"PENDING"}]"#
+            )),
+            CheckStatus::Pending
+        );
+        // The false-green guard: a failing StatusContext must NOT be misread as
+        // neutral just because it lacks a `conclusion` field.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"StatusContext","context":"ci","state":"FAILURE"}]"#
+            )),
+            CheckStatus::Failing
+        );
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"StatusContext","context":"ci","state":"ERROR"}]"#
+            )),
+            CheckStatus::Failing
+        );
+    }
+
+    #[test]
+    fn check_run_status_and_conclusion_classify() {
+        // In-progress CheckRun (conclusion null) → pending, not neutral.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"build","status":"IN_PROGRESS","conclusion":null}]"#
+            )),
+            CheckStatus::Pending
+        );
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"build","status":"QUEUED","conclusion":null}]"#
+            )),
+            CheckStatus::Pending
+        );
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"}]"#
+            )),
+            CheckStatus::Passing
+        );
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"}]"#
+            )),
+            CheckStatus::Failing
+        );
+        // COMPLETED with a missing conclusion must not be guessed green.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":null}]"#
+            )),
+            CheckStatus::Pending
+        );
+    }
+
+    #[test]
+    fn non_success_conclusions_are_failing() {
+        for c in [
+            "TIMED_OUT",
+            "CANCELLED",
+            "ACTION_REQUIRED",
+            "STARTUP_FAILURE",
+            "STALE",
+        ] {
+            let json = format!(
+                r#"[{{"__typename":"CheckRun","name":"x","status":"COMPLETED","conclusion":"{c}"}}]"#
+            );
+            assert_eq!(
+                rollup_check_status(&parse_rollup(&json)),
+                CheckStatus::Failing,
+                "conclusion {c} should be failing"
+            );
+        }
+    }
+
+    #[test]
+    fn only_skipped_or_neutral_is_no_checks() {
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"x","status":"COMPLETED","conclusion":"SKIPPED"},
+                    {"__typename":"CheckRun","name":"y","status":"COMPLETED","conclusion":"NEUTRAL"}]"#
+            )),
+            CheckStatus::NoChecks
+        );
+    }
+
+    #[test]
+    fn failing_dominates_pending_and_passing() {
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"SUCCESS"},
+                    {"__typename":"CheckRun","name":"b","status":"IN_PROGRESS","conclusion":null},
+                    {"__typename":"CheckRun","name":"c","status":"COMPLETED","conclusion":"FAILURE"}]"#
+            )),
+            CheckStatus::Failing
+        );
+    }
+
+    #[test]
+    fn pending_dominates_passing() {
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"StatusContext","context":"a","state":"SUCCESS"},
+                    {"__typename":"CheckRun","name":"b","status":"IN_PROGRESS","conclusion":null}]"#
+            )),
+            CheckStatus::Pending
+        );
+    }
+
+    #[test]
+    fn skipped_alongside_success_is_passing() {
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"SKIPPED"},
+                    {"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"SUCCESS"}]"#
+            )),
+            CheckStatus::Passing
+        );
+    }
+
+    #[test]
+    fn unknown_typename_is_neutral_never_pass_or_fail() {
+        // A future/unrecognized rollup element must not read as pass or fail.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"MergeQueueEntry","state":"QUEUED"}]"#
+            )),
+            CheckStatus::NoChecks
+        );
+        // …but it must not mask a real failure either.
+        assert_eq!(
+            rollup_check_status(&parse_rollup(
+                r#"[{"__typename":"MergeQueueEntry","state":"QUEUED"},
+                    {"__typename":"StatusContext","context":"ci","state":"FAILURE"}]"#
+            )),
+            CheckStatus::Failing
+        );
     }
 }

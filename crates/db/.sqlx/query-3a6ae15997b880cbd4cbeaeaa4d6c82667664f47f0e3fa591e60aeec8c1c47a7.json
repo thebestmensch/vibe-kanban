@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE pull_requests SET check_status = ? WHERE pr_url = ? AND pr_status = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3a6ae15997b880cbd4cbeaeaa4d6c82667664f47f0e3fa591e60aeec8c1c47a7"
+}

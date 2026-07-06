@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                id,\n                workspace_id AS \"workspace_id: Uuid\",\n                repo_id AS \"repo_id: Uuid\",\n                pr_url,\n                pr_number,\n                pr_status AS \"pr_status: MergeStatus\",\n                target_branch_name,\n                merged_at AS \"merged_at: DateTime<Utc>\",\n                merge_commit_sha,\n                created_at AS \"created_at!: DateTime<Utc>\",\n                updated_at AS \"updated_at!: DateTime<Utc>\",\n                synced_at AS \"synced_at: DateTime<Utc>\"\n            FROM pull_requests\n            WHERE synced_at IS NULL OR synced_at < updated_at",
+  "query": "SELECT\n                id,\n                workspace_id AS \"workspace_id: Uuid\",\n                repo_id AS \"repo_id: Uuid\",\n                pr_url,\n                pr_number,\n                pr_status AS \"pr_status: MergeStatus\",\n                target_branch_name,\n                merged_at AS \"merged_at: DateTime<Utc>\",\n                merge_commit_sha,\n                check_status AS \"check_status: CheckStatus\",\n                created_at AS \"created_at!: DateTime<Utc>\",\n                updated_at AS \"updated_at!: DateTime<Utc>\",\n                synced_at AS \"synced_at: DateTime<Utc>\"\n            FROM pull_requests\n            WHERE workspace_id = $1 AND repo_id = $2\n            ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -49,23 +49,28 @@
         "type_info": "Text"
       },
       {
-        "name": "created_at!: DateTime<Utc>",
+        "name": "check_status: CheckStatus",
         "ordinal": 9,
-        "type_info": "Datetime"
+        "type_info": "Text"
       },
       {
-        "name": "updated_at!: DateTime<Utc>",
+        "name": "created_at!: DateTime<Utc>",
         "ordinal": 10,
         "type_info": "Datetime"
       },
       {
-        "name": "synced_at: DateTime<Utc>",
+        "name": "updated_at!: DateTime<Utc>",
         "ordinal": 11,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "synced_at: DateTime<Utc>",
+        "ordinal": 12,
         "type_info": "Datetime"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 2
     },
     "nullable": [
       false,
@@ -77,10 +82,11 @@
       false,
       true,
       true,
+      true,
       false,
       false,
       true
     ]
   },
-  "hash": "1af7a606a64d9662d6edc4fbeaae0d53a4d657a6e29b2561e820085a2d9e3348"
+  "hash": "bf832739fc5006ca18b8448b7c196aad6b267120b0a0d08c04bc0256c6026840"
 }

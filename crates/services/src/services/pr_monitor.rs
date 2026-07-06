@@ -136,6 +136,19 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
         );
 
         if matches!(&status.status, MergeStatus::Open) {
+            // Still open: the merge state is unchanged, but the CI-check rollup
+            // may have moved (pending → passing/failing). Persist a check-status
+            // change so the board badge stays live through the review loop. This
+            // is the only path that writes check_status for open PRs, so it must
+            // run *before* the early return — not only on merge/close.
+            if pr.check_status != status.check_status {
+                PullRequest::update_check_status(&self.db.pool, &pr.pr_url, status.check_status)
+                    .await?;
+                debug!(
+                    "PR #{} check status changed to {:?}",
+                    pr.pr_number, status.check_status
+                );
+            }
             return Ok(());
         }
 

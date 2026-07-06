@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE pull_requests SET pr_status = ?, merged_at = ?, merge_commit_sha = ?, check_status = NULL, updated_at = ?, synced_at = NULL WHERE pr_url = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "bda154e41141b6d9ce6d7c237acc382f12f88268731cb257deec6c5249bb9e0d"
+}

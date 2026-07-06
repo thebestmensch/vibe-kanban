@@ -140,6 +140,11 @@
       "open": "Open PR #{{number}}",
       "merged": "マージ済みPR #{{prNumber}}"
     },
+    "checks": {
+      "passing": "チェック成功",
+      "failing": "チェック失敗",
+      "pending": "チェック実行中"
+    },
     "actions": {
       "title": "Gitアクション",
       "changeTarget": "ターゲットを変更",

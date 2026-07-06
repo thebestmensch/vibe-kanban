@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
-use super::merge::{Merge, MergeStatus, PrMerge, PullRequestInfo};
+use super::merge::{CheckStatus, Merge, MergeStatus, PrMerge, PullRequestInfo};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct PullRequest {
@@ -17,6 +17,7 @@ pub struct PullRequest {
     pub target_branch_name: String,
     pub merged_at: Option<DateTime<Utc>>,
     pub merge_commit_sha: Option<String>,
+    pub check_status: Option<CheckStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub synced_at: Option<DateTime<Utc>>,
@@ -89,6 +90,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -113,12 +115,42 @@ impl PullRequest {
             MergeStatus::Unknown => "unknown",
         };
         let now = Utc::now();
+        // A merged/closed PR has no meaningful CI-check status — clear it so a
+        // stale terminal value never lingers. `synced_at = NULL` re-queues the
+        // merge-state change for remote upload (this is a real state change).
         sqlx::query!(
-            "UPDATE pull_requests SET pr_status = ?, merged_at = ?, merge_commit_sha = ?, updated_at = ?, synced_at = NULL WHERE pr_url = ?",
+            "UPDATE pull_requests SET pr_status = ?, merged_at = ?, merge_commit_sha = ?, check_status = NULL, updated_at = ?, synced_at = NULL WHERE pr_url = ?",
             status_str,
             merged_at,
             merge_commit_sha,
             now,
+            pr_url,
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update only the CI-check status of an open PR.
+    ///
+    /// Deliberately touches neither `updated_at` nor `synced_at`: check status is
+    /// a local-only concern in v1 (no remote column), so a pending→passing flip
+    /// must not re-queue a remote sync via `get_pending_sync`. The local board
+    /// reads `check_status` straight off the row regardless of sync state.
+    pub async fn update_check_status(
+        pool: &SqlitePool,
+        pr_url: &str,
+        check_status: Option<CheckStatus>,
+    ) -> Result<(), sqlx::Error> {
+        // Guard on `pr_status = 'open'`: check status is only meaningful for open
+        // PRs (merge/close clears it), and this prevents a stale rollup from a
+        // merge-race from rewriting a just-closed row. `check_status` binds
+        // directly — the `sqlx::Type` derive owns the enum↔TEXT mapping, so a
+        // manual variant→string match would just duplicate (and risk drifting
+        // from) the SELECT decode path.
+        sqlx::query!(
+            "UPDATE pull_requests SET check_status = ? WHERE pr_url = ? AND pr_status = 'open'",
+            check_status,
             pr_url,
         )
         .execute(pool)
@@ -142,6 +174,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -169,6 +202,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -198,6 +232,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -240,6 +275,7 @@ impl PullRequest {
                 t.target_branch_name,
                 t.merged_at AS "merged_at: DateTime<Utc>",
                 t.merge_commit_sha,
+                t.check_status AS "check_status: CheckStatus",
                 t.created_at AS "created_at!: DateTime<Utc>",
                 t.updated_at AS "updated_at!: DateTime<Utc>",
                 t.synced_at AS "synced_at: DateTime<Utc>"
@@ -278,6 +314,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -302,6 +339,7 @@ impl PullRequest {
                 target_branch_name,
                 merged_at AS "merged_at: DateTime<Utc>",
                 merge_commit_sha,
+                check_status AS "check_status: CheckStatus",
                 created_at AS "created_at!: DateTime<Utc>",
                 updated_at AS "updated_at!: DateTime<Utc>",
                 synced_at AS "synced_at: DateTime<Utc>"
@@ -337,6 +375,7 @@ impl PullRequest {
                 status: self.pr_status.clone(),
                 merged_at: self.merged_at,
                 merge_commit_sha: self.merge_commit_sha.clone(),
+                check_status: self.check_status,
             },
         }
     }

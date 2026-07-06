@@ -486,6 +486,10 @@ impl AzCli {
                 .source_ref_name
                 .map(|r| r.strip_prefix("refs/heads/").unwrap_or(&r).to_string())
                 .unwrap_or_default(),
+            // CI-check status is not extracted for Azure DevOps in v1 (out of
+            // scope) — `None` renders as unknown/absent, never a false green.
+            check_status: None,
+            merge_state: None,
         }
     }
 

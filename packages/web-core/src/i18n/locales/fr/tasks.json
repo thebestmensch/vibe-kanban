@@ -250,6 +250,11 @@
       "number": "PR #{{number}}",
       "merged": "PR #{{prNumber}} fusionnée"
     },
+    "checks": {
+      "passing": "Vérifications réussies",
+      "failing": "Vérifications en échec",
+      "pending": "Vérifications en cours"
+    },
     "actions": {
       "title": "Actions Git",
       "changeTarget": "Changer la cible",
