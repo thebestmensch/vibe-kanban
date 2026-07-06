@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects SET claude_account_variant = $2 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f000bc940a18a271d05c9ae6c72467f9ec68f13fe1e78bbea2dbda149c19cb73"
+}

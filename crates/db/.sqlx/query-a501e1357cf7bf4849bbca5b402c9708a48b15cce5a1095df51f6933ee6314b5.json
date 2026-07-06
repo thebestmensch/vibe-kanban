@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT claude_account_variant FROM projects WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "claude_account_variant",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a501e1357cf7bf4849bbca5b402c9708a48b15cce5a1095df51f6933ee6314b5"
+}

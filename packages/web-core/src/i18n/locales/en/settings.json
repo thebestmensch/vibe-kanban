@@ -532,6 +532,11 @@
         "confirmSwitch": "You have unsaved changes. Are you sure you want to switch repositories? Your changes will be lost."
       }
     },
+    "claudeAccount": {
+      "label": "Default Claude account",
+      "helper": "Agents spawned fresh from this project's cards default to this Claude variant (account). Pick a specific account explicitly at spawn to override it for one workspace.",
+      "globalDefault": "Global default"
+    },
     "linear": {
       "accounts": {
         "title": "Linear accounts",

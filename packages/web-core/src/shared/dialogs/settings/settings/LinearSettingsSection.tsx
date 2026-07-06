@@ -9,6 +9,8 @@ import {
   remoteProjectsApi,
   LOCAL_BOARD_ORG_ID,
 } from '@/shared/lib/api';
+import { useUserSystem } from '@/shared/hooks/useUserSystem';
+import { getSortedExecutorVariantKeys } from '@/shared/lib/executor';
 import {
   SettingsCard,
   SettingsCheckbox,
@@ -213,6 +215,36 @@ function LinearProjectSyncCard() {
   });
   const boundKey = bindingQuery.data?.account_key ?? null;
 
+  // JM-735: per-project default Claude executor variant (account). Options are
+  // the live CLAUDE_CODE profile variants; NONE_VALUE = no override (fall through
+  // to the global default at spawn). Read/written via a dedicated endpoint so the
+  // remote/Electric project shape is untouched (mirrors the Linear binding).
+  const { profiles } = useUserSystem();
+  const claudeVariantOptions = useMemo(() => {
+    const keys = getSortedExecutorVariantKeys(profiles?.['CLAUDE_CODE']);
+    return [
+      { value: NONE_VALUE, label: t('settings.claudeAccount.globalDefault') },
+      ...keys.map((k) => ({ value: k, label: k })),
+    ];
+  }, [profiles, t]);
+
+  const claudeVariantQuery = useQuery({
+    queryKey: ['projectClaudeVariant', selectedProjectId],
+    queryFn: () => remoteProjectsApi.getClaudeVariant(selectedProjectId!),
+    enabled: !!selectedProjectId,
+  });
+  const selectedProjectVariant = claudeVariantQuery.data?.variant ?? null;
+
+  const saveClaudeVariant = useMutation({
+    mutationFn: (variant: string | null) =>
+      remoteProjectsApi.setClaudeVariant(selectedProjectId!, variant),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['projectClaudeVariant', selectedProjectId],
+      });
+    },
+  });
+
   const statusesQuery = useQuery({
     queryKey: ['localProjectStatuses', selectedProjectId],
     queryFn: () => remoteProjectsApi.listStatusesByProject(selectedProjectId!),
@@ -399,6 +431,21 @@ function LinearProjectSyncCard() {
                 setSeededFor(null);
               }}
               placeholder={t('settings.linear.sync.projectPlaceholder')}
+            />
+          </SettingsField>
+
+          {/* JM-735: per-project default Claude account (executor variant). */}
+          <SettingsField
+            label={t('settings.claudeAccount.label')}
+            description={t('settings.claudeAccount.helper')}
+          >
+            <SettingsSelect
+              value={selectedProjectVariant ?? NONE_VALUE}
+              options={claudeVariantOptions}
+              disabled={!selectedProjectId || saveClaudeVariant.isPending}
+              onChange={(value) =>
+                saveClaudeVariant.mutate(value === NONE_VALUE ? null : value)
+              }
             />
           </SettingsField>
 

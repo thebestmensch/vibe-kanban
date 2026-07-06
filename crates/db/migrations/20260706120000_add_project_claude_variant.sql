@@ -1,0 +1,13 @@
+-- JM-735: per-project default Claude executor variant.
+--
+-- Which Claude executor variant (a `profiles.json` CLAUDE_CODE variant, e.g.
+-- WORK / PERSONAL — each carries its own `env.CLAUDE_CONFIG_DIR`, i.e. a
+-- distinct Claude account) an agent spawned fresh from this project's card
+-- should default to. Opaque user-config string, so TEXT. NULL = no per-project
+-- default; fresh spawns fall through to the global `config.executor_profile`.
+--
+-- Resolution is a create-time DEFAULT only: the value seeds the variant picker
+-- for a new workspace and stays user-overridable before spawn. Continuations
+-- (follow-up / retry / PR-created) carry their own executor_config and are NOT
+-- rebound to the project default — live sessions keep the account they started.
+ALTER TABLE projects ADD COLUMN claude_account_variant TEXT;

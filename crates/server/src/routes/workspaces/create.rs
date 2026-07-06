@@ -2,12 +2,18 @@ use std::collections::HashMap;
 
 use axum::{Json, extract::State, response::Json as ResponseJson};
 use db::models::{
+    board::BoardProjects,
     requests::{
         CreateAndStartWorkspaceRequest, CreateAndStartWorkspaceResponse, CreateWorkspaceApiRequest,
+        LinkedIssueInfo,
     },
     workspace::{CreateWorkspace, Workspace},
 };
 use deployment::Deployment;
+use executors::{
+    executors::BaseCodingAgent,
+    profile::{ExecutorConfig, ExecutorConfigs, canonical_variant_key},
+};
 use services::services::container::ContainerService;
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -209,6 +215,91 @@ fn rewrite_imported_issue_attachments_markdown(
     rewritten
 }
 
+/// Decide whether a fresh spawn should adopt a board project's default Claude
+/// variant (JM-735). Returns the variant to apply, or `None` to leave the
+/// client's `executor_config` untouched.
+///
+/// Applies ONLY when the executor is Claude, the client sent no explicit variant
+/// (`None`), and the project carries a default. Note `None` also matches an
+/// explicit "DEFAULT" pick (the client serialises DEFAULT as an absent variant),
+/// so a project default takes precedence over an unspecified/default selection —
+/// to run a project's cards on a different account for one task, pick that
+/// variant explicitly. Non-Claude / explicit variant / no project default → keep
+/// the client's config verbatim.
+fn resolve_project_variant(
+    executor: &BaseCodingAgent,
+    client_variant: Option<&str>,
+    project_variant: Option<&str>,
+) -> Option<String> {
+    if !matches!(executor, BaseCodingAgent::ClaudeCode) || client_variant.is_some() {
+        return None;
+    }
+    project_variant.map(str::to_string)
+}
+
+/// IO wrapper for [`resolve_project_variant`]: short-circuits before any DB
+/// round-trip when resolution cannot apply (non-Claude, explicit variant, or no
+/// linked board project), otherwise looks up the linked project's default.
+///
+/// `linked_issue.remote_project_id` is the LOCAL board `projects.id` (the board's
+/// legacy field name), so the lookup is a direct scalar read. Only fresh
+/// workspace creation resolves a project default; continuations (follow-up /
+/// retry / PR-created) run through other routes and carry their own
+/// `executor_config` — they are intentionally NOT rebound to the project default.
+async fn resolve_spawn_variant(
+    deployment: &DeploymentImpl,
+    executor_config: &ExecutorConfig,
+    linked_issue: Option<&LinkedIssueInfo>,
+) -> Option<String> {
+    if !matches!(executor_config.executor, BaseCodingAgent::ClaudeCode)
+        || executor_config.variant.is_some()
+    {
+        return None;
+    }
+    let li = linked_issue?;
+    // A lookup error degrades to the global default (spawn still succeeds) rather
+    // than failing the workspace on a transient DB hiccup — but log it so the
+    // dropped project preference is observable, not silent.
+    let project_variant =
+        match BoardProjects::claude_account_variant(&deployment.db().pool, li.remote_project_id)
+            .await
+        {
+            Ok(variant) => variant,
+            Err(e) => {
+                tracing::warn!(
+                    project = %li.remote_project_id,
+                    "failed to read project Claude variant, using global default: {e}"
+                );
+                None
+            }
+        };
+    let resolved = resolve_project_variant(
+        &executor_config.executor,
+        executor_config.variant.as_deref(),
+        project_variant.as_deref(),
+    )?;
+    // Revalidate before returning: a project default bound earlier can go stale
+    // if that CLAUDE_CODE profile variant is later renamed or removed. An unknown
+    // variant would reach `get_coding_agent()` and fail workspace start with
+    // `UnknownExecutorType` instead of degrading — so treat a stale bind like the
+    // DB-miss path and drop to the global default. Lookups resolve by exact key,
+    // so canonicalize (matches the save-time validation in `set_project_claude_variant`).
+    let key = canonical_variant_key(&resolved);
+    let known = ExecutorConfigs::get_cached()
+        .executors
+        .get(&BaseCodingAgent::ClaudeCode)
+        .is_some_and(|profile| profile.configurations.contains_key(&key));
+    if !known {
+        tracing::warn!(
+            variant = %resolved,
+            project = %li.remote_project_id,
+            "project Claude variant is no longer a live CLAUDE_CODE profile, using global default"
+        );
+        return None;
+    }
+    Some(key)
+}
+
 pub async fn create_and_start_workspace(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateAndStartWorkspaceRequest>,
@@ -221,6 +312,7 @@ pub async fn create_and_start_workspace(
         prompt,
         attachment_ids,
     } = payload;
+    let mut executor_config = executor_config;
 
     let mut workspace_prompt = normalize_prompt(&prompt).ok_or_else(|| {
         ApiError::BadRequest(
@@ -295,6 +387,19 @@ pub async fn create_and_start_workspace(
     let workspace = managed_workspace.workspace.clone();
     tracing::info!("Created workspace {}", workspace.id);
 
+    // JM-735: a fresh Claude spawn with no explicit variant adopts the linked
+    // board project's default account. No-op for non-Claude, explicit-variant,
+    // and ad-hoc (no linked issue) spawns.
+    if let Some(variant) =
+        resolve_spawn_variant(&deployment, &executor_config, linked_issue.as_ref()).await
+    {
+        tracing::info!(
+            variant = %variant,
+            "applying project default Claude variant to fresh spawn"
+        );
+        executor_config.variant = Some(variant);
+    }
+
     let execution_process = deployment
         .container()
         .start_workspace(&workspace, executor_config.clone(), workspace_prompt)
@@ -323,9 +428,49 @@ pub async fn create_and_start_workspace(
 mod tests {
     use chrono::Utc;
     use db::models::file::File;
+    use executors::executors::BaseCodingAgent;
     use uuid::Uuid;
 
-    use super::{ImportedIssueAttachment, rewrite_imported_issue_attachments_markdown};
+    use super::{
+        ImportedIssueAttachment, resolve_project_variant,
+        rewrite_imported_issue_attachments_markdown,
+    };
+
+    // --- JM-735 resolve_project_variant (per-project Claude variant) ---------
+
+    #[test]
+    fn variant_claude_no_client_pick_adopts_project_default() {
+        assert_eq!(
+            resolve_project_variant(&BaseCodingAgent::ClaudeCode, None, Some("WORK")),
+            Some("WORK".to_string())
+        );
+    }
+
+    #[test]
+    fn variant_explicit_client_pick_wins() {
+        // Client explicitly chose PERSONAL — the project default must not override.
+        assert_eq!(
+            resolve_project_variant(&BaseCodingAgent::ClaudeCode, Some("PERSONAL"), Some("WORK")),
+            None
+        );
+    }
+
+    #[test]
+    fn variant_no_project_default_is_noop() {
+        assert_eq!(
+            resolve_project_variant(&BaseCodingAgent::ClaudeCode, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn variant_non_claude_executor_is_noop() {
+        // A project default must never apply to a different executor family.
+        assert_eq!(
+            resolve_project_variant(&BaseCodingAgent::Amp, None, Some("WORK")),
+            None
+        );
+    }
 
     fn imported_file(
         attachment_id: Uuid,

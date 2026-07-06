@@ -7,7 +7,7 @@ mod issue_relationships;
 mod issue_tags;
 mod issues;
 mod project_statuses;
-mod projects;
+pub mod projects;
 pub mod pull_requests;
 mod tags;
 mod workspaces;
