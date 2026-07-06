@@ -10,7 +10,10 @@ use db::models::{
     workspace::{CreateWorkspace, Workspace},
 };
 use deployment::Deployment;
-use executors::{executors::BaseCodingAgent, profile::ExecutorConfig};
+use executors::{
+    executors::BaseCodingAgent,
+    profile::{ExecutorConfig, ExecutorConfigs, canonical_variant_key},
+};
 use services::services::container::ContainerService;
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -270,11 +273,31 @@ async fn resolve_spawn_variant(
                 None
             }
         };
-    resolve_project_variant(
+    let resolved = resolve_project_variant(
         &executor_config.executor,
         executor_config.variant.as_deref(),
         project_variant.as_deref(),
-    )
+    )?;
+    // Revalidate before returning: a project default bound earlier can go stale
+    // if that CLAUDE_CODE profile variant is later renamed or removed. An unknown
+    // variant would reach `get_coding_agent()` and fail workspace start with
+    // `UnknownExecutorType` instead of degrading — so treat a stale bind like the
+    // DB-miss path and drop to the global default. Lookups resolve by exact key,
+    // so canonicalize (matches the save-time validation in `set_project_claude_variant`).
+    let key = canonical_variant_key(&resolved);
+    let known = ExecutorConfigs::get_cached()
+        .executors
+        .get(&BaseCodingAgent::ClaudeCode)
+        .is_some_and(|profile| profile.configurations.contains_key(&key));
+    if !known {
+        tracing::warn!(
+            variant = %resolved,
+            project = %li.remote_project_id,
+            "project Claude variant is no longer a live CLAUDE_CODE profile, using global default"
+        );
+        return None;
+    }
+    Some(key)
 }
 
 pub async fn create_and_start_workspace(
