@@ -32,6 +32,36 @@ pub enum SendMessageShortcut {
     Enter,
 }
 
+/// Linear integration credentials, modeled as a KEYED collection (multi-account
+/// from day one) — deliberately NOT a single-account blob like `GitHubConfig`.
+/// Keyed by a short account key (e.g. "personal", "work"). See ADR 0002 (JM-718).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+pub struct LinearConfig {
+    #[serde(default)]
+    pub accounts: std::collections::HashMap<String, LinearAccount>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+pub struct LinearAccount {
+    /// Linear API token (personal API key or OAuth access token). Plaintext at
+    /// rest (local-only, per operator decision); MUST be redacted before this
+    /// Config is returned over the wire — see `Config::redacted`.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Display label for this account's Linear workspace.
+    #[serde(default)]
+    pub workspace_name: Option<String>,
+    /// Linear team id whose workflow states `state_map` targets (v1: one team
+    /// per account).
+    #[serde(default)]
+    pub team_id: Option<String>,
+    /// Board status -> Linear workflow-state id. Keyed by `project_statuses.id`
+    /// (a stable UUID string), NOT status name — names are per-project and
+    /// user-editable.
+    #[serde(default)]
+    pub state_map: std::collections::HashMap<String, String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 pub struct Config {
     pub config_version: String,
@@ -68,9 +98,23 @@ pub struct Config {
     pub relay_enabled: bool,
     #[serde(default)]
     pub host_nickname: Option<String>,
+    #[serde(default)]
+    pub linear: LinearConfig,
 }
 
 impl Config {
+    /// A clone of this config safe to return over the wire: Linear account
+    /// tokens are stripped. Any handler returning `Config` to a client (e.g.
+    /// `GET /api/info`) MUST use this. Linear accounts are managed only via
+    /// their dedicated routes, never round-tripped through `PUT /config`.
+    pub fn redacted(&self) -> Self {
+        let mut cfg = self.clone();
+        for account in cfg.linear.accounts.values_mut() {
+            account.token = None;
+        }
+        cfg
+    }
+
     fn from_v7_config(old_config: v7::Config) -> Self {
         // Convert Option<bool> to bool: None or Some(true) become true, Some(false) stays false
         let analytics_enabled = old_config.analytics_enabled.unwrap_or(true);
@@ -99,6 +143,7 @@ impl Config {
             send_message_shortcut: SendMessageShortcut::default(),
             relay_enabled: true,
             host_nickname: None,
+            linear: LinearConfig::default(),
         }
     }
 
@@ -155,6 +200,48 @@ impl Default for Config {
             send_message_shortcut: SendMessageShortcut::default(),
             relay_enabled: true,
             host_nickname: None,
+            linear: LinearConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacted_strips_linear_tokens_but_preserves_the_rest() {
+        let mut cfg = Config::default();
+        cfg.linear.accounts.insert(
+            "work".to_string(),
+            LinearAccount {
+                token: Some("lin_api_secret".to_string()),
+                workspace_name: Some("OneOnMe".to_string()),
+                team_id: Some("team-123".to_string()),
+                state_map: std::collections::HashMap::from([(
+                    "status-uuid".to_string(),
+                    "linear-state-uuid".to_string(),
+                )]),
+            },
+        );
+
+        let redacted = cfg.redacted();
+        let acct = redacted.linear.accounts.get("work").unwrap();
+
+        // Token stripped on the wire...
+        assert_eq!(acct.token, None);
+        // ...but non-secret fields preserved so the UI can still render the account.
+        assert_eq!(acct.workspace_name.as_deref(), Some("OneOnMe"));
+        assert_eq!(acct.team_id.as_deref(), Some("team-123"));
+        assert_eq!(
+            acct.state_map.get("status-uuid").map(String::as_str),
+            Some("linear-state-uuid")
+        );
+
+        // The original (persisted/in-memory) config still holds the real token.
+        assert_eq!(
+            cfg.linear.accounts.get("work").unwrap().token.as_deref(),
+            Some("lin_api_secret")
+        );
     }
 }

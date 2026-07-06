@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.id                 as \"id!: Uuid\",\n                      i.status_id          as \"status_id!: Uuid\",\n                      i.linear_issue_id    as \"linear_issue_id!\",\n                      p.linear_account_key as \"linear_account_key\"\n               FROM issues i\n               JOIN projects p ON p.id = i.project_id\n               WHERE i.linear_sync_pending = 1 AND i.linear_issue_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "status_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "linear_issue_id!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "linear_account_key",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d2984f2f95c979db2af702a10d05bead3808e12f279273335899e27575515ddd"
+}

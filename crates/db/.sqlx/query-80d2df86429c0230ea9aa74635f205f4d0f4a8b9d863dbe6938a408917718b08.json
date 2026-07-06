@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id                      as \"issue_id!: Uuid\",\n                      linear_issue_identifier as \"linear_issue_identifier!\",\n                      linear_url              as \"linear_url!\",\n                      linear_sync_pending     as \"linear_sync_pending!: i64\"\n               FROM issues\n               WHERE project_id = $1 AND linear_issue_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "issue_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "linear_issue_identifier!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "linear_url!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "linear_sync_pending!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "80d2df86429c0230ea9aa74635f205f4d0f4a8b9d863dbe6938a408917718b08"
+}

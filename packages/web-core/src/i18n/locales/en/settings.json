@@ -27,6 +27,8 @@
         "agentsDesc": "Coding agent configurations",
         "mcp": "MCP Servers",
         "mcpDesc": "Model Context Protocol servers",
+        "linear": "Linear",
+        "linearDesc": "Mirror card status to Linear tickets",
         "organizations": "Organization Settings",
         "organizationsDesc": "Manage organization members and permissions",
         "remote-projects": "Projects",
@@ -528,6 +530,46 @@
         "unsavedChanges": "You have unsaved changes",
         "discard": "Discard",
         "confirmSwitch": "You have unsaved changes. Are you sure you want to switch repositories? Your changes will be lost."
+      }
+    },
+    "linear": {
+      "accounts": {
+        "title": "Linear accounts",
+        "description": "Connect a Linear account so the board can mirror card status onto its tickets. Tokens are stored locally and never sent to the browser.",
+        "keyLabel": "Account name",
+        "keyPlaceholder": "e.g. personal, work",
+        "tokenLabel": "API key",
+        "tokenPlaceholder": "lin_api_… or OAuth token",
+        "workspaceLabel": "Workspace",
+        "workspacePlaceholder": "Optional label",
+        "teamLabel": "Team ID",
+        "teamHelper": "Linear team the workflow states belong to.",
+        "teamPlaceholder": "Optional — maps columns",
+        "connect": "Connect account",
+        "remove": "Remove account",
+        "noMetadata": "No workspace or team set"
+      },
+      "sync": {
+        "title": "Project sync",
+        "description": "Bind a board project to a Linear account and map each column to a Linear workflow state.",
+        "noProjects": "No local projects found.",
+        "projectLabel": "Project",
+        "projectPlaceholder": "Select a project",
+        "accountLabel": "Linear account",
+        "accountHelper": "Which connected account this project mirrors to.",
+        "accountPlaceholder": "Select an account",
+        "unbound": "Not linked",
+        "mappingLabel": "Column mapping",
+        "mappingHelper": "Each board column maps to a Linear workflow state. Unmapped columns are not pushed.",
+        "loadingStates": "Loading workflow states…",
+        "noColumns": "This project has no visible columns.",
+        "stateNone": "— Don't sync —",
+        "statePlaceholder": "Select a state",
+        "saveMapping": "Save mapping"
+      },
+      "errors": {
+        "connectFailed": "Failed to connect account.",
+        "workflowStatesFailed": "Failed to load Linear workflow states."
       }
     },
     "relay": {

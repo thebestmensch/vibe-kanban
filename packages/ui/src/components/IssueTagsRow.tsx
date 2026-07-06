@@ -1,8 +1,14 @@
 import type { ReactNode } from 'react';
-import { PlusIcon, HashIcon, GitPullRequest } from '@phosphor-icons/react';
+import {
+  PlusIcon,
+  HashIcon,
+  GitPullRequest,
+  ArrowsClockwiseIcon,
+} from '@phosphor-icons/react';
 import { cn } from '../lib/cn';
 import { PRESET_COLORS } from './ColorPicker';
 import { PrBadge, type PrBadgeStatus } from './PrBadge';
+import { LinearBadge } from './LinearBadge';
 import { TAG_COLORS } from './SearchableTagDropdown';
 
 // Re-export for backwards compatibility.
@@ -27,17 +33,25 @@ export interface LinkedIssue {
   title: string;
 }
 
+export interface LinkedLinearIssue {
+  identifier: string;
+  url: string;
+  syncPending?: boolean;
+}
+
 export interface IssueTagsRowProps<TTag extends IssueTagBase = IssueTagBase> {
   selectedTagIds: string[];
   availableTags: TTag[];
   linkedPrs?: LinkedPullRequest[];
   linkedIssues?: LinkedIssue[];
+  linearLink?: LinkedLinearIssue | null;
   onTagsChange: (tagIds: string[]) => void;
   onCreateTag?: (data: { name: string; color: string }) => string;
   renderAddTagControl?: (
     props: IssueTagsRowAddTagControlProps<TTag>
   ) => ReactNode;
   onLinkPr?: () => void;
+  onLinkToLinear?: () => void;
   disabled?: boolean;
   className?: string;
 }
@@ -58,10 +72,12 @@ export function IssueTagsRow<TTag extends IssueTagBase>({
   availableTags,
   linkedPrs = [],
   linkedIssues = [],
+  linearLink,
   onTagsChange,
   onCreateTag,
   renderAddTagControl,
   onLinkPr,
+  onLinkToLinear,
   disabled,
   className,
 }: IssueTagsRowProps<TTag>) {
@@ -141,6 +157,28 @@ export function IssueTagsRow<TTag extends IssueTagBase>({
           aria-label="Link pull request"
         >
           <GitPullRequest className="size-icon-xs" weight="bold" />
+        </button>
+      )}
+
+      {/* Linked Linear issue */}
+      {linearLink && (
+        <LinearBadge
+          identifier={linearLink.identifier}
+          url={linearLink.url}
+          syncPending={linearLink.syncPending}
+        />
+      )}
+
+      {/* Link / manage Linear issue button */}
+      {onLinkToLinear && (
+        <button
+          type="button"
+          onClick={onLinkToLinear}
+          disabled={disabled}
+          className="flex items-center justify-center h-5 w-5 rounded-sm text-low hover:text-normal hover:bg-panel transition-colors disabled:opacity-50"
+          aria-label={linearLink ? 'Manage Linear issue' : 'Link Linear issue'}
+        >
+          <ArrowsClockwiseIcon className="size-icon-xs" weight="bold" />
         </button>
       )}
 

@@ -7,6 +7,8 @@ import {
   type MouseEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
+import { linearApi } from '@/shared/lib/api';
 import { useProjectContext } from '@/shared/hooks/useProjectContext';
 import { useOrgContext } from '@/shared/hooks/useOrgContext';
 import { useWorkspaceContext } from '@/shared/hooks/useWorkspaceContext';
@@ -560,6 +562,42 @@ export function KanbanContainer() {
     [membersWithProfilesById]
   );
 
+  // Linear ticket links for this project's cards (JM-718), keyed by issue id, so
+  // the board badge can merge them without bloating the shared cloud Issue type.
+  // Keep the badge's sync state fresh: the projection is a separate cache entry
+  // from the board's issues, and `linear_sync_pending` flips server-side on a
+  // move (set to 1) and again when the outbound loop clears it. With no
+  // invalidation, the default 5-min staleTime would strand the badge. So poll
+  // fast while any link is syncing, slower to catch new moves on linked cards,
+  // and refetch on focus. Link/unlink mutations invalidate this key directly.
+  const { data: linearLinks } = useQuery({
+    queryKey: ['linearLinks', projectId],
+    queryFn: () => linearApi.listProjectLinks(projectId),
+    enabled: !!projectId,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) => {
+      const data = query.state.data ?? [];
+      if (data.some((l) => l.linear_sync_pending)) return 3000;
+      if (data.length > 0) return 15000;
+      return false;
+    },
+  });
+  const linearLinksByIssue = useMemo(() => {
+    const map: Record<
+      string,
+      { identifier: string; url: string; syncPending: boolean }
+    > = {};
+    for (const link of linearLinks ?? []) {
+      map[link.issue_id] = {
+        identifier: link.linear_issue_identifier,
+        url: link.linear_url,
+        syncPending: link.linear_sync_pending,
+      };
+    }
+    return map;
+  }, [linearLinks]);
+
   const localWorkspacesById = useMemo(() => {
     const map = new Map<string, (typeof activeWorkspaces)[number]>();
 
@@ -1055,6 +1093,7 @@ export function KanbanContainer() {
                               tags={getTagObjectsForIssue(issue.id)}
                               assignees={issueAssigneesMap[issue.id] ?? []}
                               pullRequests={issueCardPullRequests}
+                              linearLink={linearLinksByIssue[issue.id]}
                               relationships={resolveRelationshipsForIssue(
                                 issue.id,
                                 getRelationshipsForIssue(issue.id),

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE issues\n               SET linear_issue_id = $2,\n                   linear_issue_identifier = $3,\n                   linear_url = $4,\n                   linear_state_id = $5,\n                   linear_sync_pending = $6\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "bb74dd829958762c440328a7d02e644fd6ee6572c3a2e49b0ebfd1355674592f"
+}

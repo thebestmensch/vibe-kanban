@@ -213,6 +213,38 @@ impl BoardProjects {
         Ok(())
     }
 
+    /// Read a project's bound Linear account key (JM-718). `None` = unbound (or
+    /// the project does not exist — callers that need that distinction check the
+    /// issue/project first).
+    pub async fn linear_account_key(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"SELECT linear_account_key FROM projects WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.and_then(|r| r.linear_account_key))
+    }
+
+    /// Bind (or unbind, with `None`) a project to a Linear account key (JM-718).
+    pub async fn set_linear_account_key(
+        pool: &SqlitePool,
+        id: Uuid,
+        key: Option<String>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE projects SET linear_account_key = $2 WHERE id = $1"#,
+            id,
+            key
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     // NOTE: no board delete. `projects` is the shared workspace/task table — its
     // `id` is referenced with ON DELETE CASCADE by legacy local subsystems
     // (`tasks`, `task_attempts`, `project_repos`, …), and the v1 migration
@@ -792,6 +824,24 @@ impl Issues {
         .fetch_one(&mut *conn)
         .await?;
 
+        // Outbound Linear mirror (JM-718): flag a *linked* card for a status
+        // push only when the column actually changed. Scoped by
+        // `linear_issue_id IS NOT NULL` in SQL so unlinked cards are never
+        // flagged. This is the single choke point for both `update` and
+        // `bulk_update` (both route through `update_on`) and the ONLY writer of
+        // `linear_sync_pending = 1` — the sync loop's own writes use dedicated
+        // methods that never set it (echo-loop invariant, ADR 0002 §8).
+        if existing.status_id != status_id {
+            sqlx::query!(
+                r#"UPDATE issues
+                   SET linear_sync_pending = 1
+                   WHERE id = $1 AND linear_issue_id IS NOT NULL"#,
+                id
+            )
+            .execute(&mut *conn)
+            .await?;
+        }
+
         Ok(row.into_api())
     }
 
@@ -826,4 +876,186 @@ impl Issues {
             .await?;
         Ok(result.rows_affected())
     }
+
+    // --- Outbound Linear mirror (JM-718) -----------------------------------
+    // These methods are the sync loop's exclusive write path plus one read
+    // projection for the board badge. None routes through `update_on`, so none
+    // can (re)set `linear_sync_pending = 1` — that flag is set only by the
+    // user-driven mutation hook above (echo invariant).
+
+    /// Read the Linear link projection for a project's linked cards (JM-718
+    /// slice 5). A local-only board read — deliberately NOT folded onto the
+    /// shared `api_types::Issue`, which the cloud `crates/remote` Postgres repo
+    /// also uses (its schema has no `linear_*` columns). The badge merges this by
+    /// `issue_id` on the frontend. Identifier/url are non-null because
+    /// `link_linear` writes all link fields together.
+    pub async fn list_linear_links(
+        pool: &SqlitePool,
+        project_id: Uuid,
+    ) -> Result<Vec<LinearLinkRow>, sqlx::Error> {
+        sqlx::query_as!(
+            LinearLinkRow,
+            r#"SELECT id                      as "issue_id!: Uuid",
+                      linear_issue_identifier as "linear_issue_identifier!",
+                      linear_url              as "linear_url!",
+                      linear_sync_pending     as "linear_sync_pending!: i64"
+               FROM issues
+               WHERE project_id = $1 AND linear_issue_id IS NOT NULL"#,
+            project_id
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Drain the cards flagged for an outbound Linear status push, joined with
+    /// their project's bound account key. The `WHERE` guarantees every row has a
+    /// `linear_issue_id`, so the field is non-null in the result.
+    pub async fn list_pending_linear_sync(
+        pool: &SqlitePool,
+    ) -> Result<Vec<PendingLinearSync>, sqlx::Error> {
+        sqlx::query_as!(
+            PendingLinearSync,
+            r#"SELECT i.id                 as "id!: Uuid",
+                      i.status_id          as "status_id!: Uuid",
+                      i.linear_issue_id    as "linear_issue_id!",
+                      p.linear_account_key as "linear_account_key"
+               FROM issues i
+               JOIN projects p ON p.id = i.project_id
+               WHERE i.linear_sync_pending = 1 AND i.linear_issue_id IS NOT NULL"#
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Record a successful push: clear the pending flag and remember the state we
+    /// pushed (drift/idempotency baseline).
+    ///
+    /// `expected_status_id` is the column the loop *snapshotted and pushed*. The
+    /// clear is conditional on the card still being in that column — guarding a
+    /// TOCTOU race: if the user moves the card again while the Linear request is
+    /// in flight, `update_on` re-sets `linear_sync_pending = 1` for the new
+    /// column; an unconditional clear-by-id would wipe that newer flag and leave
+    /// the board and Linear permanently diverged with no retry queued. When the
+    /// column has changed the `UPDATE` matches zero rows, so the pending flag
+    /// survives and the next tick re-syncs to the new column.
+    pub async fn mark_linear_synced(
+        pool: &SqlitePool,
+        id: Uuid,
+        expected_status_id: Uuid,
+        state_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE issues
+               SET linear_sync_pending = 0, linear_state_id = $3
+               WHERE id = $1 AND status_id = $2"#,
+            id,
+            expected_status_id,
+            state_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Clear the pending flag without recording a state (skipped/unmapped card,
+    /// or a deterministic failure we don't want to retry forever). Conditional on
+    /// `expected_status_id` for the same anti-race reason as `mark_linear_synced`:
+    /// if the card moved during the decision/push, leave the flag for the newer
+    /// column rather than clearing it.
+    pub async fn clear_linear_pending(
+        pool: &SqlitePool,
+        id: Uuid,
+        expected_status_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE issues SET linear_sync_pending = 0 WHERE id = $1 AND status_id = $2"#,
+            id,
+            expected_status_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Establish a manual card↔issue link (JM-718 slice 4). `linear_state_id`
+    /// seeds the drift baseline (the issue's *current* Linear state at link
+    /// time). `sync_pending` reconciles board-wins on link: if the card already
+    /// sits in a mapped column whose target differs from the issue's current
+    /// state, the caller passes `true` so the outbound loop pushes the board's
+    /// state — otherwise the link would leave the board and Linear diverged with
+    /// nothing queued (ADR 0002 board-wins). The partial `UNIQUE INDEX` on
+    /// `linear_issue_id` is the backstop against linking one issue to two cards;
+    /// a violation surfaces as a unique-constraint error the route maps to 409.
+    pub async fn link_linear(
+        pool: &SqlitePool,
+        id: Uuid,
+        linear_issue_id: &str,
+        linear_issue_identifier: &str,
+        linear_url: &str,
+        linear_state_id: Option<&str>,
+        sync_pending: bool,
+    ) -> Result<(), sqlx::Error> {
+        let pending = i64::from(sync_pending);
+        sqlx::query!(
+            r#"UPDATE issues
+               SET linear_issue_id = $2,
+                   linear_issue_identifier = $3,
+                   linear_url = $4,
+                   linear_state_id = $5,
+                   linear_sync_pending = $6
+               WHERE id = $1"#,
+            id,
+            linear_issue_id,
+            linear_issue_identifier,
+            linear_url,
+            linear_state_id,
+            pending
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Unlink a card whose Linear issue no longer exists (deleted in Linear).
+    /// Clears every link field and the pending flag so it never retries a dead
+    /// issue (ADR 0002 §7).
+    pub async fn unlink_linear(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE issues
+               SET linear_issue_id = NULL,
+                   linear_issue_identifier = NULL,
+                   linear_url = NULL,
+                   linear_state_id = NULL,
+                   linear_sync_pending = 0
+               WHERE id = $1"#,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// One linked card's Linear projection for the board badge. Produced by
+/// [`Issues::list_linear_links`].
+#[derive(Debug, Clone)]
+pub struct LinearLinkRow {
+    pub issue_id: Uuid,
+    pub linear_issue_identifier: String,
+    pub linear_url: String,
+    /// `1` while a status change is queued for an outbound push.
+    pub linear_sync_pending: i64,
+}
+
+/// A card flagged for an outbound Linear status push, joined with its project's
+/// bound account key. Produced by [`Issues::list_pending_linear_sync`].
+#[derive(Debug, Clone)]
+pub struct PendingLinearSync {
+    pub id: Uuid,
+    pub status_id: Uuid,
+    /// Non-null: the drain query filters `linear_issue_id IS NOT NULL`.
+    pub linear_issue_id: String,
+    /// The account key bound to the card's project (`projects.linear_account_key`).
+    /// `None` means the project isn't bound to a Linear account yet.
+    pub linear_account_key: Option<String>,
 }
