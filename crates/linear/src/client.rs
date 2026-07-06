@@ -83,16 +83,25 @@ impl LinearClient {
     }
 
     /// Resolve a Linear issue by team-key identifier (e.g. `OOM-123`) for the
-    /// manual-link flow. `NotFound` if no such issue exists.
+    /// manual-link flow. `NotFound` if the identifier is malformed or no such
+    /// issue exists.
+    ///
+    /// The `issue(id:)` GraphQL field only accepts a UUID, so a human identifier
+    /// must be resolved by filtering on the team key + issue number instead.
     pub async fn resolve_issue_by_identifier(
         &self,
         identifier: &str,
     ) -> Result<ResolvedIssue, LinearError> {
-        const Q: &str = "query($id:String!){ \
-            issue(id:$id){ id identifier url state { id } team { id } } }";
-        let data = self.execute(Q, json!({ "id": identifier })).await?;
+        let (team_key, number) = split_identifier(identifier)
+            .ok_or_else(|| LinearError::NotFound(identifier.to_string()))?;
+        const Q: &str = "query($key:String!,$number:Float!){ \
+            issues(filter:{ team:{ key:{ eq:$key } }, number:{ eq:$number } }){ \
+            nodes { id identifier url state { id } team { id } } } }";
+        let data = self
+            .execute(Q, json!({ "key": team_key, "number": number }))
+            .await?;
         let issue = data
-            .get("issue")
+            .pointer("/issues/nodes/0")
             .filter(|v| !v.is_null())
             .ok_or_else(|| LinearError::NotFound(identifier.to_string()))?;
         parse_resolved_issue(issue)
@@ -238,6 +247,19 @@ fn json_error_message(body: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Split a Linear issue identifier like `OOM-123` into its team key and issue
+/// number. Returns `None` for anything that is not `<KEY>-<NUMBER>`. Pure — the
+/// `issue(id:)` GraphQL field only takes a UUID, so the manual-link flow resolves
+/// the human identifier via team key + number, which this parses out.
+fn split_identifier(identifier: &str) -> Option<(&str, u64)> {
+    let (key, number) = identifier.trim().rsplit_once('-')?;
+    if key.is_empty() {
+        return None;
+    }
+    let number: u64 = number.parse().ok()?;
+    Some((key, number))
+}
+
 /// Parse the `issue { ... }` sub-object of a resolve query into `ResolvedIssue`.
 /// Split out so it is unit-testable without a live GraphQL round-trip.
 fn parse_resolved_issue(issue: &Value) -> Result<ResolvedIssue, LinearError> {
@@ -355,6 +377,21 @@ mod tests {
         let err = classify(200, body).unwrap_err();
         assert!(matches!(err, LinearError::Api(_)));
         assert!(!err.should_retry());
+    }
+
+    #[test]
+    fn split_identifier_valid() {
+        assert_eq!(split_identifier("OOM-123"), Some(("OOM", 123)));
+        assert_eq!(split_identifier("  JM-7  "), Some(("JM", 7)));
+    }
+
+    #[test]
+    fn split_identifier_rejects_malformed() {
+        // No dash, empty key, empty number, and non-numeric number all reject.
+        assert_eq!(split_identifier("garbage"), None);
+        assert_eq!(split_identifier("-5"), None);
+        assert_eq!(split_identifier("OOM-"), None);
+        assert_eq!(split_identifier("OOM-abc"), None);
     }
 
     #[test]
