@@ -12,7 +12,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use db::models::merge::{CheckStatus, MergeStatus};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use url::Url;
@@ -195,6 +195,16 @@ fn rollup_check_status(elements: &[GhCheckElement]) -> CheckStatus {
     }
 }
 
+/// Deserialize helper: treat a JSON `null` as `T::default()`. `#[serde(default)]`
+/// alone only handles a *missing* key, not an explicit `null`.
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPrResponse {
@@ -212,7 +222,10 @@ struct GhPrResponse {
     head_ref_name: Option<String>,
     #[serde(default)]
     updated_at: Option<DateTime<Utc>>,
-    #[serde(default)]
+    // GitHub returns `statusCheckRollup: null` (not `[]`) for a commit with no
+    // checks, and `#[serde(default)]` only covers a *missing* field — a present
+    // `null` would fail to deserialize into `Vec`. Coerce `null` → empty.
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     status_check_rollup: Vec<GhCheckElement>,
     #[serde(default)]
     merge_state_status: Option<String>,
@@ -687,6 +700,22 @@ mod tests {
     #[test]
     fn empty_rollup_is_no_checks() {
         assert_eq!(rollup_check_status(&[]), CheckStatus::NoChecks);
+    }
+
+    #[test]
+    fn null_rollup_deserializes_as_empty() {
+        // GitHub returns `statusCheckRollup: null` for a checkless commit; the
+        // whole PR response must still parse (regression guard for the
+        // deserialize_null_default helper), yielding an empty rollup.
+        let resp: GhPrResponse = serde_json::from_str(
+            r#"{"number":1,"url":"https://example.com/pr/1","statusCheckRollup":null}"#,
+        )
+        .expect("null statusCheckRollup should not break PR parsing");
+        assert!(resp.status_check_rollup.is_empty());
+        assert_eq!(
+            rollup_check_status(&resp.status_check_rollup),
+            CheckStatus::NoChecks
+        );
     }
 
     #[test]

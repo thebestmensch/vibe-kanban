@@ -142,15 +142,15 @@ impl PullRequest {
         pr_url: &str,
         check_status: Option<CheckStatus>,
     ) -> Result<(), sqlx::Error> {
-        let check_str = check_status.map(|c| match c {
-            CheckStatus::Passing => "passing",
-            CheckStatus::Failing => "failing",
-            CheckStatus::Pending => "pending",
-            CheckStatus::NoChecks => "no_checks",
-        });
+        // Guard on `pr_status = 'open'`: check status is only meaningful for open
+        // PRs (merge/close clears it), and this prevents a stale rollup from a
+        // merge-race from rewriting a just-closed row. `check_status` binds
+        // directly — the `sqlx::Type` derive owns the enum↔TEXT mapping, so a
+        // manual variant→string match would just duplicate (and risk drifting
+        // from) the SELECT decode path.
         sqlx::query!(
-            "UPDATE pull_requests SET check_status = ? WHERE pr_url = ?",
-            check_str,
+            "UPDATE pull_requests SET check_status = ? WHERE pr_url = ? AND pr_status = 'open'",
+            check_status,
             pr_url,
         )
         .execute(pool)

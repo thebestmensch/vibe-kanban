@@ -250,6 +250,11 @@
       "number": "PR #{{number}}",
       "merged": "Merged PR #{{prNumber}}"
     },
+    "checks": {
+      "passing": "Checks passing",
+      "failing": "Checks failing",
+      "pending": "Checks running"
+    },
     "actions": {
       "title": "Git Actions",
       "changeTarget": "Change target",

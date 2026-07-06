@@ -3,6 +3,7 @@ import {
   WarningCircleIcon,
   SpinnerGapIcon,
 } from '@phosphor-icons/react';
+import { useTranslation } from 'react-i18next';
 import type { CheckStatus } from 'shared/types';
 import { cn } from '../lib/cn';
 
@@ -13,13 +14,6 @@ export interface PrChecksBadgeProps {
   showLabel?: boolean;
   className?: string;
 }
-
-const CHECK_LABEL: Record<CheckStatus, string> = {
-  passing: 'Checks passing',
-  failing: 'Checks failing',
-  pending: 'Checks running',
-  no_checks: '',
-};
 
 /**
  * Compact CI-check status indicator for a pull request. Deliberately separate
@@ -35,16 +29,40 @@ export function PrChecksBadge({
   showLabel = false,
   className,
 }: PrChecksBadgeProps) {
+  const { t } = useTranslation('tasks');
   if (!status || status === 'no_checks') return null;
 
-  const { Icon, tone, spin } =
-    status === 'passing'
-      ? { Icon: CheckCircleIcon, tone: 'text-success', spin: false }
-      : status === 'failing'
-        ? { Icon: WarningCircleIcon, tone: 'text-error', spin: false }
-        : { Icon: SpinnerGapIcon, tone: 'text-normal', spin: true };
-
-  const label = CHECK_LABEL[status];
+  // Switch (not a ternary chain) so a future `CheckStatus` variant is caught at
+  // compile time via the `never` guard instead of silently rendering as pending.
+  const { Icon, tone, spin, label } = (() => {
+    switch (status) {
+      case 'passing':
+        return {
+          Icon: CheckCircleIcon,
+          tone: 'text-success',
+          spin: false,
+          label: t('git.checks.passing'),
+        };
+      case 'failing':
+        return {
+          Icon: WarningCircleIcon,
+          tone: 'text-error',
+          spin: false,
+          label: t('git.checks.failing'),
+        };
+      case 'pending':
+        return {
+          Icon: SpinnerGapIcon,
+          tone: 'text-normal',
+          spin: true,
+          label: t('git.checks.pending'),
+        };
+      default: {
+        const _exhaustive: never = status;
+        return _exhaustive;
+      }
+    }
+  })();
 
   return (
     <span

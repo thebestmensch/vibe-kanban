@@ -140,6 +140,11 @@
       "open": "Open PR #{{number}}",
       "merged": "PR #{{prNumber}} fusionado"
     },
+    "checks": {
+      "passing": "Comprobaciones correctas",
+      "failing": "Comprobaciones fallidas",
+      "pending": "Comprobaciones en curso"
+    },
     "createRepo": {
       "dialog": {
         "title": "Crear Nuevo Repositorio",

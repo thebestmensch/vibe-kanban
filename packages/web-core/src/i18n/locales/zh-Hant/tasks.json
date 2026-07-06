@@ -171,6 +171,11 @@
       "number": "PR #{{number}}",
       "merged": "已合併PR #{{prNumber}}"
     },
+    "checks": {
+      "passing": "檢查通過",
+      "failing": "檢查失敗",
+      "pending": "檢查進行中"
+    },
     "actions": {
       "title": "Git 操作",
       "changeTarget": "變更目標",

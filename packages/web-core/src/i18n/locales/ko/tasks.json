@@ -163,6 +163,11 @@
       "number": "PR #{{number}}",
       "merged": "병합된 PR #{{prNumber}}"
     },
+    "checks": {
+      "passing": "검사 통과",
+      "failing": "검사 실패",
+      "pending": "검사 실행 중"
+    },
     "actions": {
       "title": "Git 작업",
       "changeTarget": "대상 변경",
