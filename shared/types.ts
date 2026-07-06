@@ -180,7 +180,13 @@ export type PrMerge = { id: string, workspace_id: string, repo_id: string, creat
 
 export type MergeStatus = "open" | "merged" | "closed" | "unknown";
 
-export type PullRequestInfo = { number: bigint, url: string, status: MergeStatus, merged_at: string | null, merge_commit_sha: string | null, };
+export type CheckStatus = "passing" | "failing" | "pending" | "no_checks";
+
+export type PullRequestInfo = { number: bigint, url: string, status: MergeStatus, merged_at: string | null, merge_commit_sha: string | null, 
+/**
+ * Aggregated CI-check status for the PR (`None` = unknown/unavailable).
+ */
+check_status: CheckStatus | null, };
 
 export type ApprovalInfo = { approval_id: string, tool_name: string, execution_process_id: string, is_question: boolean, created_at: string, timeout_at: string, };
 
@@ -436,7 +442,17 @@ export type UnifiedPrComment = { "comment_type": "general", id: string, author: 
 
 export type ProviderKind = "git_hub" | "azure_dev_ops" | "unknown";
 
-export type PullRequestDetail = { number: bigint, url: string, status: MergeStatus, merged_at: string | null, merge_commit_sha: string | null, title: string, base_branch: string, head_branch: string, };
+export type PullRequestDetail = { number: bigint, url: string, status: MergeStatus, merged_at: string | null, merge_commit_sha: string | null, title: string, base_branch: string, head_branch: string, 
+/**
+ * Aggregated CI-check status. `None` = unknown/unavailable (not yet polled,
+ * or a non-GitHub provider); only populated for open PRs.
+ */
+check_status: CheckStatus | null, 
+/**
+ * Raw GitHub `mergeStateStatus` (CLEAN/BLOCKED/BEHIND/…), carried in-memory
+ * for potential mergeability display. Not persisted in v1.
+ */
+merge_state: string | null, };
 
 export type GitRemote = { name: string, url: string, };
 

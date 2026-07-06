@@ -1,5 +1,6 @@
 import { GitBranchIcon } from '@phosphor-icons/react';
 import { useTranslation } from 'react-i18next';
+import type { CheckStatus } from 'shared/types';
 import { cn } from '../lib/cn';
 import { RepoCard, type RepoAction } from './RepoCard';
 import { InputField } from './InputField';
@@ -15,6 +16,7 @@ export interface RepoInfo {
   prNumber?: number;
   prUrl?: string;
   prStatus?: 'open' | 'merged' | 'closed' | 'unknown';
+  prCheckStatus?: CheckStatus | null;
   showPushButton?: boolean;
   isPushPending?: boolean;
   isPushSuccess?: boolean;
@@ -70,6 +72,7 @@ export function GitPanel({
             prNumber={repo.prNumber}
             prUrl={repo.prUrl}
             prStatus={repo.prStatus}
+            prCheckStatus={repo.prCheckStatus}
             showPushButton={repo.showPushButton}
             isPushPending={repo.isPushPending}
             isPushSuccess={repo.isPushSuccess}

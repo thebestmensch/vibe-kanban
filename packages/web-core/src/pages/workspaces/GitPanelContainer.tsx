@@ -11,7 +11,12 @@ import { CommandBarDialog } from '@/shared/dialogs/command-bar/CommandBarDialog'
 import { GitPanel, type RepoInfo } from '@vibe/ui/components/GitPanel';
 import { Actions } from '@/shared/actions';
 import type { RepoAction } from '@vibe/ui/components/RepoCard';
-import type { Workspace, RepoWithTargetBranch, Merge } from 'shared/types';
+import type {
+  Workspace,
+  RepoWithTargetBranch,
+  Merge,
+  CheckStatus,
+} from 'shared/types';
 
 export interface GitPanelContainerProps {
   selectedWorkspace: Workspace | undefined;
@@ -64,6 +69,7 @@ export function GitPanelContainer({
         let prNumber: number | undefined;
         let prUrl: string | undefined;
         let prStatus: 'open' | 'merged' | 'closed' | 'unknown' | undefined;
+        let prCheckStatus: CheckStatus | null | undefined;
 
         if (repoStatus?.merges) {
           const openPR = repoStatus.merges.find(
@@ -78,6 +84,7 @@ export function GitPanelContainer({
             prNumber = Number(relevantPR.pr_info.number);
             prUrl = relevantPR.pr_info.url;
             prStatus = relevantPR.pr_info.status;
+            prCheckStatus = relevantPR.pr_info.check_status;
           }
         } else if (summaryPr) {
           // Use workspace summary PR data as a fast fallback while branchStatus loads.
@@ -97,6 +104,7 @@ export function GitPanelContainer({
           prNumber,
           prUrl,
           prStatus,
+          prCheckStatus,
           isTargetRemote: repoStatus?.is_target_remote ?? false,
         };
       }),

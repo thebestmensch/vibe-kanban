@@ -22,6 +22,8 @@ import {
   DropdownMenuItem,
 } from './Dropdown';
 import { SplitButton, type SplitButtonOption } from './SplitButton';
+import { PrChecksBadge } from './PrChecksBadge';
+import type { CheckStatus } from 'shared/types';
 
 export type RepoAction =
   | 'pull-request'
@@ -50,6 +52,7 @@ interface RepoCardProps {
   prNumber?: number;
   prUrl?: string;
   prStatus?: 'open' | 'merged' | 'closed' | 'unknown';
+  prCheckStatus?: CheckStatus | null;
   showPushButton?: boolean;
   isPushPending?: boolean;
   isPushSuccess?: boolean;
@@ -73,6 +76,7 @@ export function RepoCard({
   prNumber,
   prUrl,
   prStatus,
+  prCheckStatus,
   showPushButton = false,
   isPushPending = false,
   isPushSuccess = false,
@@ -209,6 +213,8 @@ export function RepoCard({
               {t('git.pr.open', { number: prNumber })}
             </span>
           )}
+          {/* CI-check status — only meaningful while the PR is open */}
+          {prStatus === 'open' && <PrChecksBadge status={prCheckStatus} />}
           {/* Push button - shows loading/success/error state */}
           {(showPushButton ||
             isPushPending ||

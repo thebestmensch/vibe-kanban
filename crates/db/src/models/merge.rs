@@ -16,6 +16,21 @@ pub enum MergeStatus {
     Unknown,
 }
 
+/// Aggregated CI-check status for a pull request, derived from GitHub's
+/// `statusCheckRollup`. `None` (an `Option<CheckStatus>` on the wire) means the
+/// status is unknown or unavailable — not yet fetched, a non-GitHub provider, or
+/// a parse failure — and is rendered as absent rather than green. `NoChecks`
+/// distinguishes "fetched, but the PR has no meaningful checks configured".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Type)]
+#[sqlx(type_name = "check_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Passing,
+    Failing,
+    Pending,
+    NoChecks,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Merge {
@@ -51,6 +66,8 @@ pub struct PullRequestInfo {
     pub status: MergeStatus,
     pub merged_at: Option<chrono::DateTime<chrono::Utc>>,
     pub merge_commit_sha: Option<String>,
+    /// Aggregated CI-check status for the PR (`None` = unknown/unavailable).
+    pub check_status: Option<CheckStatus>,
 }
 
 /// Row type for direct merges only (PR data now lives in pull_requests).

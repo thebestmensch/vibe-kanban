@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use db::models::merge::{MergeStatus, PullRequestInfo};
+use db::models::merge::{CheckStatus, MergeStatus, PullRequestInfo};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ts_rs::TS;
@@ -149,6 +149,12 @@ pub struct PullRequestDetail {
     pub title: String,
     pub base_branch: String,
     pub head_branch: String,
+    /// Aggregated CI-check status. `None` = unknown/unavailable (not yet polled,
+    /// or a non-GitHub provider); only populated for open PRs.
+    pub check_status: Option<CheckStatus>,
+    /// Raw GitHub `mergeStateStatus` (CLEAN/BLOCKED/BEHIND/…), carried in-memory
+    /// for potential mergeability display. Not persisted in v1.
+    pub merge_state: Option<String>,
 }
 
 impl From<PullRequestDetail> for PullRequestInfo {
@@ -159,6 +165,7 @@ impl From<PullRequestDetail> for PullRequestInfo {
             status: d.status,
             merged_at: d.merged_at,
             merge_commit_sha: d.merge_commit_sha,
+            check_status: d.check_status,
         }
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE pull_requests SET check_status = ? WHERE pr_url = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "470fc3e28b72a91456db01407c8a9980ae558953b904dc28a2e33fc70939d5fa"
+}
