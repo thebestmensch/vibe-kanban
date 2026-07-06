@@ -103,6 +103,7 @@ import {
   LinearAccountView,
   ConnectLinearAccountBody,
   SetStateMapBody,
+  SetImportConfigBody,
   LinearWorkflowStateView,
   BindProjectBody,
   ProjectLinearBindingView,
@@ -1761,6 +1762,16 @@ export const linearApi = {
   ): Promise<LinearAccountView> => {
     const response = await makeRequest(
       `/api/linear/accounts/${encodeURIComponent(key)}/state-map`,
+      { method: 'PUT', body: JSON.stringify(body) }
+    );
+    return handleApiResponse<LinearAccountView>(response);
+  },
+  setImportConfig: async (
+    key: string,
+    body: SetImportConfigBody
+  ): Promise<LinearAccountView> => {
+    const response = await makeRequest(
+      `/api/linear/accounts/${encodeURIComponent(key)}/import-config`,
       { method: 'PUT', body: JSON.stringify(body) }
     );
     return handleApiResponse<LinearAccountView>(response);

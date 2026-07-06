@@ -60,6 +60,17 @@ pub struct LinearAccount {
     /// user-editable.
     #[serde(default)]
     pub state_map: std::collections::HashMap<String, String>,
+    /// Inbound import (JM-734): the project that assigned/labelled Linear issues
+    /// import into. `None` disables inbound for this account (never guess a
+    /// project — account→project is N:1). MUST be a project bound to this account
+    /// (`projects.linear_account_key == <this key>`); enforced at the config
+    /// route and re-checked at sweep time to survive a later rebind.
+    #[serde(default)]
+    pub import_target_project_id: Option<String>,
+    /// Inbound import filter (JM-734): also import issues carrying this label
+    /// (in addition to assigned-to-me). `None` = assigned-to-me only.
+    #[serde(default)]
+    pub import_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
@@ -222,6 +233,7 @@ mod tests {
                     "status-uuid".to_string(),
                     "linear-state-uuid".to_string(),
                 )]),
+                ..Default::default()
             },
         );
 
@@ -243,5 +255,16 @@ mod tests {
             cfg.linear.accounts.get("work").unwrap().token.as_deref(),
             Some("lin_api_secret")
         );
+    }
+
+    #[test]
+    fn inbound_import_fields_default_on_pre_jm734_account() {
+        // A LinearAccount persisted before JM-734 has no import_* keys. They must
+        // deserialize as None via #[serde(default)] rather than failing the parse.
+        let acct: LinearAccount =
+            serde_json::from_str(r#"{"token":"lin_api_x","team_id":"t1","state_map":{}}"#).unwrap();
+        assert_eq!(acct.import_target_project_id, None);
+        assert_eq!(acct.import_label, None);
+        assert_eq!(acct.team_id.as_deref(), Some("t1"));
     }
 }

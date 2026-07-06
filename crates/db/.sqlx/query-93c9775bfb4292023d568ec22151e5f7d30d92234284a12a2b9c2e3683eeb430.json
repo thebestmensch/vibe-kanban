@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO issues (\n                       id, project_id, issue_number, simple_id, status_id, title,\n                       sort_order, extension_metadata,\n                       linear_issue_id, linear_issue_identifier, linear_url,\n                       linear_state_id, linear_sync_pending\n                   )\n                   VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', $8, $9, $10, $11, 0)\n                   ON CONFLICT (linear_issue_id) WHERE linear_issue_id IS NOT NULL\n                   DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "93c9775bfb4292023d568ec22151e5f7d30d92234284a12a2b9c2e3683eeb430"
+}

@@ -35,6 +35,10 @@ pub fn router() -> Router<DeploymentImpl> {
         )
         .route("/linear/accounts/{key}/state-map", put(set_state_map))
         .route(
+            "/linear/accounts/{key}/import-config",
+            put(set_import_config),
+        )
+        .route(
             "/linear/accounts/{key}/workflow-states",
             get(list_workflow_states),
         )
@@ -60,6 +64,10 @@ pub struct LinearAccountView {
     pub team_id: Option<String>,
     pub has_token: bool,
     pub state_map: HashMap<String, String>,
+    /// Inbound import (JM-734): the project assigned/labelled issues import into.
+    pub import_target_project_id: Option<String>,
+    /// Inbound import (JM-734): extra label filter (in addition to assigned-to-me).
+    pub import_label: Option<String>,
 }
 
 impl LinearAccountView {
@@ -70,6 +78,8 @@ impl LinearAccountView {
             team_id: account.team_id.clone(),
             has_token: account.token.is_some(),
             state_map: account.state_map.clone(),
+            import_target_project_id: account.import_target_project_id.clone(),
+            import_label: account.import_label.clone(),
         }
     }
 }
@@ -86,6 +96,15 @@ pub struct ConnectLinearAccountBody {
 pub struct SetStateMapBody {
     /// `project_statuses.id` (UUID string) → Linear workflow-state id.
     pub state_map: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+pub struct SetImportConfigBody {
+    /// Project that this account's assigned/labelled issues import into. `None`
+    /// disables inbound import for the account. MUST be bound to this account.
+    pub import_target_project_id: Option<String>,
+    /// Extra label filter (in addition to assigned-to-me). `None` = assigned only.
+    pub import_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -170,6 +189,30 @@ async fn list_accounts(
     Ok(ResponseJson(ApiResponse::success(views)))
 }
 
+/// Decide which team-scoped settings survive a re-connect of an existing
+/// account key. Pure so the "clear on team change" rule is unit-tested without a
+/// live deployment. Returns `(state_map, import_target_project_id, import_label)`
+/// to apply to the reconnected account.
+///
+/// Preserve when the account is new-but-same-team (a token refresh); clear all
+/// three when the `team_id` differs (or there was no prior account), because the
+/// state map is keyed to the old team's workflow states and the import target is
+/// a board configured against the old team — carrying either forward would push
+/// to wrong states or import unrelated issues.
+fn preserved_on_reconnect(
+    previous: Option<&LinearAccount>,
+    new_team_id: Option<&str>,
+) -> (HashMap<String, String>, Option<String>, Option<String>) {
+    match previous {
+        Some(prev) if prev.team_id.as_deref() == new_team_id => (
+            prev.state_map.clone(),
+            prev.import_target_project_id.clone(),
+            prev.import_label.clone(),
+        ),
+        _ => (HashMap::new(), None, None),
+    }
+}
+
 async fn connect_account(
     State(deployment): State<DeploymentImpl>,
     axum::extract::Json(body): axum::extract::Json<ConnectLinearAccountBody>,
@@ -182,23 +225,31 @@ async fn connect_account(
     }
 
     let key = body.key.trim().to_string();
-    // Preserve an existing account's state_map on re-connect (updating a token
-    // shouldn't wipe the column mapping).
-    let existing_state_map = deployment
+    // Carry forward the existing account's team-scoped settings on re-connect —
+    // but ONLY when the Linear team is unchanged. A token refresh (same team)
+    // must not wipe the column map or import target; a reconnect that repoints
+    // the same key at a DIFFERENT team invalidates all of them (the state_map is
+    // keyed to the old team's workflow states, and the import target is a board
+    // configured for the old team), so preserving them would push to the wrong
+    // states or bulk-import unrelated issues. Clear on a team change.
+    let previous = deployment
         .config()
         .read()
         .await
         .linear
         .accounts
         .get(&key)
-        .map(|a| a.state_map.clone())
-        .unwrap_or_default();
+        .cloned();
+    let (existing_state_map, existing_target, existing_label) =
+        preserved_on_reconnect(previous.as_ref(), body.team_id.as_deref());
 
     let account = LinearAccount {
         token: Some(body.token),
         workspace_name: body.workspace_name,
         team_id: body.team_id,
         state_map: existing_state_map,
+        import_target_project_id: existing_target,
+        import_label: existing_label,
     };
     let view = LinearAccountView::of(&key, &account);
 
@@ -241,6 +292,61 @@ async fn set_state_map(
     persist_linear(&deployment, |linear| {
         if let Some(account) = linear.accounts.get_mut(&key) {
             account.state_map = body.state_map;
+        }
+    })
+    .await?;
+
+    let cfg = deployment.config().read().await;
+    let account = cfg
+        .linear
+        .accounts
+        .get(&key)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown Linear account '{key}'")))?;
+    Ok(ResponseJson(ApiResponse::success(LinearAccountView::of(
+        &key, account,
+    ))))
+}
+
+/// Set an account's inbound-import config (JM-734): the target project + label
+/// filter. Rejects a target that is not bound to this account — otherwise a
+/// later card move would push this account's issue id with the *other* account's
+/// token, and the NotFound response would silently unlink the imported card. The
+/// binding is re-checked at sweep time too (config can drift after a rebind).
+async fn set_import_config(
+    State(deployment): State<DeploymentImpl>,
+    Path(key): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<SetImportConfigBody>,
+) -> Result<ResponseJson<ApiResponse<LinearAccountView>>, ApiError> {
+    if !deployment
+        .config()
+        .read()
+        .await
+        .linear
+        .accounts
+        .contains_key(&key)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "unknown Linear account '{key}'"
+        )));
+    }
+
+    // Validate the target project (if any) is bound to THIS account.
+    if let Some(target_raw) = body.import_target_project_id.as_deref() {
+        let target_id = Uuid::parse_str(target_raw).map_err(|_| {
+            ApiError::BadRequest("import_target_project_id is not a valid UUID".into())
+        })?;
+        let bound = BoardProjects::linear_account_key(&deployment.db().pool, target_id).await?;
+        if bound.as_deref() != Some(key.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "import target project must be bound to account '{key}' (currently bound to {bound:?})"
+            )));
+        }
+    }
+
+    persist_linear(&deployment, |linear| {
+        if let Some(account) = linear.accounts.get_mut(&key) {
+            account.import_target_project_id = body.import_target_project_id;
+            account.import_label = body.import_label;
         }
     })
     .await?;
@@ -458,5 +564,64 @@ fn linear_err(e: LinearError) -> ApiError {
         LinearError::AuthFailed(m) => ApiError::Forbidden(format!("Linear auth failed: {m}")),
         LinearError::NotFound(m) => ApiError::BadRequest(format!("not found in Linear: {m}")),
         other => ApiError::BadGateway(format!("Linear API error: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use services::services::config::LinearAccount;
+
+    use super::preserved_on_reconnect;
+
+    fn account(team: Option<&str>) -> LinearAccount {
+        LinearAccount {
+            token: Some("lin_api_x".to_string()),
+            workspace_name: Some("WS".to_string()),
+            team_id: team.map(str::to_string),
+            state_map: HashMap::from([("col".to_string(), "state".to_string())]),
+            import_target_project_id: Some("proj".to_string()),
+            import_label: Some("agent-eligible".to_string()),
+        }
+    }
+
+    #[test]
+    fn reconnect_same_team_preserves_scoped_settings() {
+        let prev = account(Some("team-1"));
+        let (map, target, label) = preserved_on_reconnect(Some(&prev), Some("team-1"));
+        assert_eq!(map.get("col").map(String::as_str), Some("state"));
+        assert_eq!(target.as_deref(), Some("proj"));
+        assert_eq!(label.as_deref(), Some("agent-eligible"));
+    }
+
+    #[test]
+    fn reconnect_changed_team_clears_scoped_settings() {
+        // A repoint to a different Linear team invalidates the team-scoped map +
+        // import target — else the next sweep imports the new team's issues into
+        // the old team's board (Codex adversarial finding).
+        let prev = account(Some("team-1"));
+        let (map, target, label) = preserved_on_reconnect(Some(&prev), Some("team-2"));
+        assert!(map.is_empty());
+        assert_eq!(target, None);
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn reconnect_cleared_team_clears_scoped_settings() {
+        // Old team set, new reconnect omits team_id → treat as a change, clear.
+        let prev = account(Some("team-1"));
+        let (map, target, label) = preserved_on_reconnect(Some(&prev), None);
+        assert!(map.is_empty());
+        assert_eq!(target, None);
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn fresh_account_has_nothing_to_preserve() {
+        let (map, target, label) = preserved_on_reconnect(None, Some("team-1"));
+        assert!(map.is_empty());
+        assert_eq!(target, None);
+        assert_eq!(label, None);
     }
 }

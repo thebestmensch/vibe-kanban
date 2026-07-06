@@ -11,6 +11,7 @@ import {
 } from '@/shared/lib/api';
 import {
   SettingsCard,
+  SettingsCheckbox,
   SettingsField,
   SettingsInput,
   SettingsSelect,
@@ -304,6 +305,45 @@ function LinearProjectSyncCard() {
     },
   });
 
+  // Inbound import (JM-734): whether THIS project is the bound account's import
+  // target, plus the optional label filter. Binding to this project is the
+  // invariant the backend requires, and this card only exposes the toggle on an
+  // already-bound project — so enabling it can never violate that invariant.
+  const importEnabled =
+    !!boundAccount?.import_target_project_id &&
+    boundAccount.import_target_project_id === selectedProjectId;
+  const [draftImportOn, setDraftImportOn] = useState(false);
+  const [draftLabel, setDraftLabel] = useState('');
+  const [importSeededFor, setImportSeededFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (importSeededFor === seededKey || bindingQuery.isLoading) return;
+    setDraftImportOn(importEnabled);
+    setDraftLabel(importEnabled ? (boundAccount?.import_label ?? '') : '');
+    setImportSeededFor(seededKey);
+  }, [
+    seededKey,
+    importSeededFor,
+    importEnabled,
+    boundAccount,
+    bindingQuery.isLoading,
+  ]);
+
+  const saveImport = useMutation({
+    mutationFn: () =>
+      linearApi.setImportConfig(boundKey!, {
+        import_target_project_id: draftImportOn ? selectedProjectId! : null,
+        import_label:
+          draftImportOn && draftLabel.trim() ? draftLabel.trim() : null,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
+    },
+  });
+
+  const importDirty =
+    draftImportOn !== importEnabled ||
+    (draftImportOn && draftLabel.trim() !== (boundAccount?.import_label ?? ''));
+
   const persistedForProject = useMemo(() => {
     const persisted = boundAccount?.state_map ?? {};
     const scoped: Record<string, string> = {};
@@ -434,6 +474,45 @@ function LinearProjectSyncCard() {
                   </div>
                 </div>
               )}
+            </SettingsField>
+          )}
+
+          {boundKey && (
+            <SettingsField
+              label={t('settings.linear.import.label')}
+              description={t('settings.linear.import.helper')}
+            >
+              <div className="space-y-3">
+                <SettingsCheckbox
+                  id="linear-import-enabled"
+                  label={t('settings.linear.import.enable')}
+                  description={t('settings.linear.import.enableHelper')}
+                  checked={draftImportOn}
+                  onChange={setDraftImportOn}
+                />
+                {draftImportOn && (
+                  <SettingsField
+                    label={t('settings.linear.import.labelFilterLabel')}
+                    description={t('settings.linear.import.labelFilterHelper')}
+                  >
+                    <SettingsInput
+                      value={draftLabel}
+                      onChange={setDraftLabel}
+                      placeholder={t(
+                        'settings.linear.import.labelFilterPlaceholder'
+                      )}
+                    />
+                  </SettingsField>
+                )}
+                <div className="flex justify-end">
+                  <PrimaryButton
+                    value={t('settings.linear.import.save')}
+                    onClick={() => saveImport.mutate()}
+                    disabled={!importDirty || saveImport.isPending}
+                    actionIcon={saveImport.isPending ? 'spinner' : undefined}
+                  />
+                </div>
+              </div>
             </SettingsField>
           )}
         </>

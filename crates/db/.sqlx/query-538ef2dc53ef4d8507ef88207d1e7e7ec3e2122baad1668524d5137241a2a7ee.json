@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT linear_issue_id as \"lid!\"\n               FROM issues\n               WHERE linear_issue_id IN (SELECT value FROM json_each(?))",
+  "describe": {
+    "columns": [
+      {
+        "name": "lid!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "538ef2dc53ef4d8507ef88207d1e7e7ec3e2122baad1668524d5137241a2a7ee"
+}
