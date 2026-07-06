@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 pub use client::LinearClient;
 pub use error::LinearError;
-pub use types::{ResolvedIssue, WorkflowState};
+pub use types::{ImportedIssue, ResolvedIssue, WorkflowState};
 
 /// A keyed collection of per-account Linear clients (multi-account from day one,
 /// e.g. `"personal"` + `"work"`). Callers resolve a client by the account key

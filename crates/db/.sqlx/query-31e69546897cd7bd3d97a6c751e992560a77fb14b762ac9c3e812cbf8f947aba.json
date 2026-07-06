@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE projects\n                   SET issue_counter = issue_counter + 1\n                   WHERE id = $1\n                   RETURNING issue_counter as \"issue_counter!: i64\",\n                             organization_id as \"organization_id!: Uuid\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "issue_counter!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "organization_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "31e69546897cd7bd3d97a6c751e992560a77fb14b762ac9c3e812cbf8f947aba"
+}

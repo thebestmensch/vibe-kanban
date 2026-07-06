@@ -294,7 +294,15 @@ export type CheckAgentAvailabilityQuery = { executor: BaseCodingAgent, };
 
 export type AgentPresetOptionsQuery = { executor: BaseCodingAgent, variant: string | null, };
 
-export type LinearAccountView = { key: string, workspace_name: string | null, team_id: string | null, has_token: boolean, state_map: { [key in string]?: string }, };
+export type LinearAccountView = { key: string, workspace_name: string | null, team_id: string | null, has_token: boolean, state_map: { [key in string]?: string }, 
+/**
+ * Inbound import (JM-734): the project assigned/labelled issues import into.
+ */
+import_target_project_id: string | null, 
+/**
+ * Inbound import (JM-734): extra label filter (in addition to assigned-to-me).
+ */
+import_label: string | null, };
 
 export type ConnectLinearAccountBody = { key: string, token: string, workspace_name: string | null, team_id: string | null, };
 
@@ -303,6 +311,17 @@ export type SetStateMapBody = {
  * `project_statuses.id` (UUID string) → Linear workflow-state id.
  */
 state_map: { [key in string]?: string }, };
+
+export type SetImportConfigBody = { 
+/**
+ * Project that this account's assigned/labelled issues import into. `None`
+ * disables inbound import for the account. MUST be bound to this account.
+ */
+import_target_project_id: string | null, 
+/**
+ * Extra label filter (in addition to assigned-to-me). `None` = assigned only.
+ */
+import_label: string | null, };
 
 export type LinearWorkflowStateView = { id: string, name: string, state_type: string, position: number, };
 
@@ -576,7 +595,20 @@ team_id: string | null,
  * (a stable UUID string), NOT status name — names are per-project and
  * user-editable.
  */
-state_map: { [key in string]?: string }, };
+state_map: { [key in string]?: string }, 
+/**
+ * Inbound import (JM-734): the project that assigned/labelled Linear issues
+ * import into. `None` disables inbound for this account (never guess a
+ * project — account→project is N:1). MUST be a project bound to this account
+ * (`projects.linear_account_key == <this key>`); enforced at the config
+ * route and re-checked at sweep time to survive a later rebind.
+ */
+import_target_project_id: string | null, 
+/**
+ * Inbound import filter (JM-734): also import issues carrying this label
+ * (in addition to assigned-to-me). `None` = assigned-to-me only.
+ */
+import_label: string | null, };
 
 export enum SoundFile { ABSTRACT_SOUND1 = "ABSTRACT_SOUND1", ABSTRACT_SOUND2 = "ABSTRACT_SOUND2", ABSTRACT_SOUND3 = "ABSTRACT_SOUND3", ABSTRACT_SOUND4 = "ABSTRACT_SOUND4", COW_MOOING = "COW_MOOING", FAHHHHH = "FAHHHHH", PHONE_VIBRATION = "PHONE_VIBRATION", ROOSTER = "ROOSTER" }
 

@@ -1034,6 +1034,337 @@ impl Issues {
         .await?;
         Ok(())
     }
+
+    // --- Inbound Linear import (JM-734) ------------------------------------
+
+    /// Import Linear issues as new cards in `target_project_id`. Returns the
+    /// number of cards actually inserted.
+    ///
+    /// Echo-loop safe: each card is written at `linear_sync_pending = 0` and this
+    /// method NEVER routes through `update_on` (the sole `pending = 1` writer), so
+    /// an imported card cannot appear in the next outbound drain (ADR 0002 §8
+    /// invariant, extended to inbound).
+    ///
+    /// Dedup: the partial `UNIQUE(linear_issue_id)` index + `ON CONFLICT DO
+    /// NOTHING` is the correctness backstop — idempotent across app restarts and
+    /// across both accounts (Linear issue ids are globally unique). The batch
+    /// pre-filter against already-linked ids is only a `projects.issue_counter`
+    /// burn-avoidance optimization for the steady state (every issue already
+    /// imported), NOT the dedup mechanism; a pre-filter/insert race can still
+    /// no-op an insert after burning one counter value — negligible for a single
+    /// poller and preferred over gapping numbers on every 60s tick.
+    pub async fn import_from_linear(
+        pool: &SqlitePool,
+        target_project_id: Uuid,
+        cards: &[ImportCard],
+    ) -> Result<usize, sqlx::Error> {
+        if cards.is_empty() {
+            return Ok(0);
+        }
+
+        // Pre-filter: drop cards whose Linear issue is already linked to ANY card
+        // (linear_issue_id is global). Avoids incrementing issue_counter for the
+        // common all-already-imported poll. `json_each` gives an IN-list without
+        // per-issue round-trips or dynamic SQL.
+        let incoming_ids: Vec<&str> = cards.iter().map(|c| c.linear_issue_id.as_str()).collect();
+        let ids_json = serde_json::to_string(&incoming_ids).unwrap_or_else(|_| "[]".to_string());
+        let existing: std::collections::HashSet<String> = sqlx::query_scalar!(
+            r#"SELECT linear_issue_id as "lid!"
+               FROM issues
+               WHERE linear_issue_id IN (SELECT value FROM json_each(?))"#,
+            ids_json
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .collect();
+
+        // Place imported cards after existing ones in the target project, in a
+        // stable order (deterministic across a re-run of the same batch).
+        let mut next_sort = sqlx::query_scalar!(
+            r#"SELECT COALESCE(MAX(sort_order), -1.0) + 1.0 as "next!: f64"
+               FROM issues WHERE project_id = $1"#,
+            target_project_id
+        )
+        .fetch_one(pool)
+        .await?;
+
+        let mut inserted = 0usize;
+        for card in cards {
+            if existing.contains(&card.linear_issue_id) {
+                continue;
+            }
+            let mut tx = pool.begin().await?;
+            let counter = sqlx::query!(
+                r#"UPDATE projects
+                   SET issue_counter = issue_counter + 1
+                   WHERE id = $1
+                   RETURNING issue_counter as "issue_counter!: i64",
+                             organization_id as "organization_id!: Uuid""#,
+                target_project_id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            let issue_number = counter.issue_counter as i32;
+            let prefix = sqlx::query_scalar!(
+                r#"SELECT issue_prefix as "issue_prefix!" FROM organizations WHERE id = $1"#,
+                counter.organization_id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            let simple_id = format!("{prefix}-{issue_number}");
+            let id = Uuid::new_v4();
+
+            let result = sqlx::query!(
+                r#"INSERT INTO issues (
+                       id, project_id, issue_number, simple_id, status_id, title,
+                       sort_order, extension_metadata,
+                       linear_issue_id, linear_issue_identifier, linear_url,
+                       linear_state_id, linear_sync_pending
+                   )
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', $8, $9, $10, $11, 0)
+                   ON CONFLICT (linear_issue_id) WHERE linear_issue_id IS NOT NULL
+                   DO NOTHING"#,
+                id,
+                target_project_id,
+                issue_number,
+                simple_id,
+                card.status_id,
+                card.title,
+                next_sort,
+                card.linear_issue_id,
+                card.linear_issue_identifier,
+                card.linear_url,
+                card.linear_state_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+
+            if result.rows_affected() > 0 {
+                inserted += 1;
+                next_sort += 1.0;
+            }
+        }
+        Ok(inserted)
+    }
+}
+
+/// A pre-resolved inbound card ready to insert (JM-734). The caller (the sync
+/// loop's inbound sweep) resolves `status_id` via [`resolve_import_status`]
+/// before handing the batch to [`Issues::import_from_linear`]; this keeps the DB
+/// crate free of any dependency on the Linear client's DTOs.
+#[derive(Debug, Clone)]
+pub struct ImportCard {
+    pub linear_issue_id: String,
+    pub linear_issue_identifier: String,
+    pub linear_url: String,
+    pub title: String,
+    pub linear_state_id: Option<String>,
+    /// The resolved local board column (from `resolve_import_status`).
+    pub status_id: Uuid,
+}
+
+/// Resolve which local board column an inbound Linear issue lands in.
+///
+/// `statuses` = the import-target project's columns. `state_map` = the account's
+/// OUTBOUND map (`project_status_id -> linear_state_id`), which may span EVERY
+/// project bound to the account. We invert ONLY the entries whose
+/// `project_status_id` belongs to `statuses` — a blind inversion of the whole
+/// map can resolve to a status in a different project, and since the FK checks
+/// existence (not project membership) the card would insert but render in no
+/// column. Within-target collision (two of this project's columns map to one
+/// Linear state) is resolved by lowest `sort_order` (leftmost) deterministically.
+///
+/// Falls back to the leftmost non-hidden column (intake) when the incoming state
+/// has no scoped mapping. Returns `None` only when the project has no non-hidden
+/// column at all — the caller must then skip the issue (status_id is NOT NULL).
+pub fn resolve_import_status(
+    statuses: &[ProjectStatus],
+    state_map: &std::collections::HashMap<String, String>,
+    incoming_state_id: Option<&str>,
+) -> Option<Uuid> {
+    if let Some(state) = incoming_state_id {
+        let mut matched: Vec<&ProjectStatus> = statuses
+            .iter()
+            .filter(|s| {
+                !s.hidden && state_map.get(&s.id.to_string()).map(String::as_str) == Some(state)
+            })
+            .collect();
+        if !matched.is_empty() {
+            matched.sort_by_key(|s| (s.sort_order, s.created_at));
+            return Some(matched[0].id);
+        }
+    }
+    statuses
+        .iter()
+        .filter(|s| !s.hidden)
+        .min_by_key(|s| (s.sort_order, s.created_at))
+        .map(|s| s.id)
+}
+
+#[cfg(test)]
+mod import_tests {
+    use std::collections::HashMap;
+
+    use api_types::{CreateProjectRequest, ProjectStatus};
+    use chrono::{TimeZone, Utc};
+    use sqlx::SqlitePool;
+    use uuid::Uuid;
+
+    use super::{BoardProjects, ImportCard, Issues, ProjectStatuses, resolve_import_status};
+
+    fn status(sort_order: i32, hidden: bool) -> ProjectStatus {
+        ProjectStatus {
+            id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            name: "col".into(),
+            color: "#fff".into(),
+            sort_order,
+            hidden,
+            created_at: Utc.timestamp_opt(0, 0).unwrap(),
+        }
+    }
+
+    // --- pure resolve_import_status (covers the design-review findings) ------
+
+    #[test]
+    fn resolve_prefers_scoped_mapped_status() {
+        let s0 = status(0, false);
+        let s1 = status(1, false);
+        let map = HashMap::from([(s1.id.to_string(), "linear-started".to_string())]);
+        let got = resolve_import_status(&[s0.clone(), s1.clone()], &map, Some("linear-started"));
+        assert_eq!(got, Some(s1.id));
+    }
+
+    #[test]
+    fn resolve_excludes_cross_project_map_entries() {
+        // The account map contains a mapping for a status that is NOT in this
+        // project (a sibling project's column) pointing at the incoming state.
+        // It must be ignored — else we'd insert a foreign-project status_id.
+        let mine = status(0, false);
+        let foreign_id = Uuid::new_v4();
+        let map = HashMap::from([(foreign_id.to_string(), "linear-started".to_string())]);
+        let got = resolve_import_status(&[mine.clone()], &map, Some("linear-started"));
+        // No scoped mapping → falls back to the leftmost column of THIS project.
+        assert_eq!(got, Some(mine.id));
+    }
+
+    #[test]
+    fn resolve_collision_picks_lowest_sort_order() {
+        let leftmost = status(0, false);
+        let rightmost = status(5, false);
+        let map = HashMap::from([
+            (leftmost.id.to_string(), "S".to_string()),
+            (rightmost.id.to_string(), "S".to_string()),
+        ]);
+        // Deliberately pass rightmost first to prove ordering, not input order.
+        let got = resolve_import_status(&[rightmost.clone(), leftmost.clone()], &map, Some("S"));
+        assert_eq!(got, Some(leftmost.id));
+    }
+
+    #[test]
+    fn resolve_mapped_hidden_falls_back_to_visible() {
+        // A hidden column mapped to the incoming state must NOT swallow the card;
+        // the mapped branch skips it and falls through to the leftmost visible.
+        let hidden_mapped = status(0, true);
+        let visible = status(1, false);
+        let map = HashMap::from([(hidden_mapped.id.to_string(), "S".to_string())]);
+        let got = resolve_import_status(&[hidden_mapped, visible.clone()], &map, Some("S"));
+        assert_eq!(got, Some(visible.id));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_leftmost_non_hidden() {
+        let hidden = status(0, true);
+        let first_visible = status(1, false);
+        let later = status(2, false);
+        let got = resolve_import_status(
+            &[hidden, first_visible.clone(), later],
+            &HashMap::new(),
+            Some("unmapped-state"),
+        );
+        assert_eq!(got, Some(first_visible.id));
+    }
+
+    #[test]
+    fn resolve_none_when_no_visible_column() {
+        let only_hidden = status(0, true);
+        assert_eq!(
+            resolve_import_status(&[only_hidden], &HashMap::new(), None),
+            None
+        );
+        assert_eq!(resolve_import_status(&[], &HashMap::new(), Some("x")), None);
+    }
+
+    // --- import_from_linear (echo-loop + dedup, AC "test this") --------------
+
+    async fn mem_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    fn card(linear_id: &str, status_id: Uuid) -> ImportCard {
+        ImportCard {
+            linear_issue_id: linear_id.into(),
+            linear_issue_identifier: format!("JM-{linear_id}"),
+            linear_url: format!("https://linear.app/x/{linear_id}"),
+            title: format!("Imported {linear_id}"),
+            linear_state_id: Some("linear-started".into()),
+            status_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn import_inserts_dedups_and_stays_out_of_outbound_drain() {
+        let pool = mem_pool().await;
+        let project = BoardProjects::create(
+            &pool,
+            &CreateProjectRequest {
+                id: None,
+                organization_id: crate::LOCAL_ORG_ID,
+                name: "Board".into(),
+                color: "#abc".into(),
+            },
+        )
+        .await
+        .unwrap();
+        // Bind the project to an account — proves echo-loop safety even when the
+        // outbound drain WOULD otherwise consider this project's linked cards.
+        BoardProjects::set_linear_account_key(&pool, project.id, Some("work".into()))
+            .await
+            .unwrap();
+        let statuses = ProjectStatuses::list_by_project(&pool, project.id)
+            .await
+            .unwrap();
+        let intake = statuses[0].id;
+
+        let batch = vec![card("A", intake), card("B", intake)];
+        let n = Issues::import_from_linear(&pool, project.id, &batch)
+            .await
+            .unwrap();
+        assert_eq!(n, 2, "both new issues imported");
+
+        // Re-import the same batch → zero new (partial-unique dedup), no error.
+        let n2 = Issues::import_from_linear(&pool, project.id, &batch)
+            .await
+            .unwrap();
+        assert_eq!(n2, 0, "already-imported issues are skipped");
+
+        // Echo-loop invariant: imported cards are written at pending=0 and never
+        // route through update_on, so the outbound drain sees nothing.
+        let pending = Issues::list_pending_linear_sync(&pool).await.unwrap();
+        assert!(
+            pending.is_empty(),
+            "imported cards must not enter the outbound drain"
+        );
+
+        // And they are real, linked cards on the board.
+        let links = Issues::list_linear_links(&pool, project.id).await.unwrap();
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|l| l.linear_sync_pending == 0));
+    }
 }
 
 /// One linked card's Linear projection for the board badge. Produced by

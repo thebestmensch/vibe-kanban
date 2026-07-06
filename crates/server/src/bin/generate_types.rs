@@ -106,6 +106,7 @@ fn generate_types_content() -> String {
         server::routes::linear::LinearAccountView::decl(),
         server::routes::linear::ConnectLinearAccountBody::decl(),
         server::routes::linear::SetStateMapBody::decl(),
+        server::routes::linear::SetImportConfigBody::decl(),
         server::routes::linear::LinearWorkflowStateView::decl(),
         server::routes::linear::BindProjectBody::decl(),
         server::routes::linear::ProjectLinearBindingView::decl(),

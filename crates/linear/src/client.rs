@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{
     error::LinearError,
-    types::{ResolvedIssue, WorkflowState},
+    types::{ImportedIssue, ResolvedIssue, WorkflowState},
 };
 
 const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
@@ -13,6 +13,16 @@ const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
 /// retryable) timeout rather than pinning the outbound sync task forever.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Page size for the inbound import sweep (Linear caps `first` at 250).
+const IMPORT_PAGE_SIZE: u32 = 50;
+/// Hard cap on pages walked per sweep. With `orderBy: updatedAt` (newest first)
+/// and a `updatedAt` window, hitting this means the recent-activity set is huge;
+/// we warn rather than scan unboundedly. 40 * 50 = 2000 issues per account.
+const IMPORT_MAX_PAGES: u32 = 40;
+/// Linear workflow-state categories that represent finished work. Excluded from
+/// the import sweep so a first run does not pull the entire closed backlog in as
+/// intake cards (JM-734 review, DA #2 / Codex backlog finding).
+const TERMINAL_STATE_TYPES: [&str; 2] = ["completed", "canceled"];
 
 /// A single-account Linear GraphQL client. Holds the account's precomputed
 /// `Authorization` header value and a shared `reqwest::Client`. Outbound-only
@@ -105,6 +115,51 @@ impl LinearClient {
             .filter(|v| !v.is_null())
             .ok_or_else(|| LinearError::NotFound(identifier.to_string()))?;
         parse_resolved_issue(issue)
+    }
+
+    /// Import sweep (JM-734 inbound): list issues in `team_id` that are either
+    /// assigned to the token's own user OR carry `label` (when set), updated
+    /// since `updated_after` (RFC3339), excluding terminal states. Walks Linear's
+    /// Relay pagination newest-first so a page-cap hit never starves recent work;
+    /// each page independently retries on transient errors via `execute`.
+    pub async fn list_assigned_issues(
+        &self,
+        team_id: &str,
+        label: Option<&str>,
+        updated_after: &str,
+    ) -> Result<Vec<ImportedIssue>, LinearError> {
+        const Q: &str = "query($filter:IssueFilter!,$first:Int!,$after:String){ \
+            issues(filter:$filter, first:$first, after:$after, orderBy:updatedAt){ \
+            nodes { id identifier title url state { id } } \
+            pageInfo { hasNextPage endCursor } } }";
+        let filter = build_import_filter(team_id, label, updated_after);
+        let mut out = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..IMPORT_MAX_PAGES {
+            let vars = json!({ "filter": filter, "first": IMPORT_PAGE_SIZE, "after": after });
+            let data = self.execute(Q, vars).await?;
+            let nodes = data
+                .pointer("/issues/nodes")
+                .ok_or_else(|| LinearError::Malformed("missing issues.nodes".into()))?;
+            out.extend(parse_imported_issues(nodes)?);
+            let has_next = data
+                .pointer("/issues/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let cursor = data
+                .pointer("/issues/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match (has_next, cursor) {
+                (true, Some(c)) => after = Some(c),
+                _ => return Ok(out),
+            }
+        }
+        tracing::warn!(
+            "list_assigned_issues hit the {IMPORT_MAX_PAGES}-page cap for team {team_id}; \
+             import may be incomplete (oldest recent issues skipped this sweep)"
+        );
+        Ok(out)
     }
 
     /// Send a GraphQL request with `backon` retry on transient failures, then
@@ -258,6 +313,92 @@ fn split_identifier(identifier: &str) -> Option<(&str, u64)> {
     }
     let number: u64 = number.parse().ok()?;
     Some((key, number))
+}
+
+/// Build the Linear `IssueFilter` for the import sweep. Pure so the filter shape
+/// (the one runtime dependency unit tests can't otherwise exercise) is at least
+/// structurally pinned. Scopes to the team, excludes terminal states, windows by
+/// `updatedAt`, and requires assigned-to-me OR the configured label.
+///
+/// A malformed filter 400s the entire sweep, so the shape mirrors Linear's
+/// documented `IssueFilter`: `team.id.eq`, `state.type.nin`, `updatedAt.gt`,
+/// `assignee.isMe.eq`, `labels.some.name.eq`, and top-level `and`/`or`.
+fn build_import_filter(team_id: &str, label: Option<&str>, updated_after: &str) -> Value {
+    let assigned = json!({ "assignee": { "isMe": { "eq": true } } });
+    // Assigned-to-me OR labelled, when a label filter is configured.
+    let who = match label {
+        Some(l) => json!({ "or": [assigned, { "labels": { "some": { "name": { "eq": l } } } }] }),
+        None => assigned,
+    };
+    json!({
+        "and": [
+            { "team": { "id": { "eq": team_id } } },
+            { "state": { "type": { "nin": TERMINAL_STATE_TYPES } } },
+            { "updatedAt": { "gt": updated_after } },
+            who,
+        ]
+    })
+}
+
+/// Parse the `issues.nodes` array of the import sweep into `ImportedIssue`s.
+/// Split out for unit testing without a live GraphQL round-trip. The array shape
+/// itself is a protocol contract (terminal `Malformed` if not an array). A
+/// single node missing a required scalar (`id`/`identifier`/`title`/`url`) is
+/// logged and skipped rather than aborting the whole batch — one corrupt record
+/// must not block importing every other issue. But a non-empty page where EVERY
+/// node is malformed is a systemic schema break (e.g. Linear renamed/dropped a
+/// required field), which must surface as a terminal `Malformed` rather than a
+/// silent empty success — otherwise inbound import stops indefinitely with only
+/// per-node warnings and no operator-visible failure.
+fn parse_imported_issues(nodes: &Value) -> Result<Vec<ImportedIssue>, LinearError> {
+    let arr = nodes
+        .as_array()
+        .ok_or_else(|| LinearError::Malformed("issues.nodes not an array".into()))?;
+    let mut out = Vec::with_capacity(arr.len());
+    let mut last_err: Option<LinearError> = None;
+    for n in arr {
+        let field = |name: &str| {
+            n.get(name)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| LinearError::Malformed(format!("issue.{name} missing")))
+        };
+        let parsed = || -> Result<ImportedIssue, LinearError> {
+            Ok(ImportedIssue {
+                id: field("id")?,
+                identifier: field("identifier")?,
+                title: field("title")?,
+                url: field("url")?,
+                state_id: n
+                    .pointer("/state/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
+        };
+        match parsed() {
+            Ok(issue) => out.push(issue),
+            Err(e) => {
+                tracing::warn!("skipping malformed import issue node: {e}");
+                last_err = Some(e);
+            }
+        }
+    }
+    // A non-empty page that yielded zero valid issues is a schema break, not a
+    // clean sweep — surface it so the monitor's empty-result path can't mask it.
+    if out.is_empty() && !arr.is_empty() {
+        return Err(
+            last_err.unwrap_or_else(|| LinearError::Malformed("all issue nodes malformed".into()))
+        );
+    }
+    if out.len() < arr.len() {
+        tracing::warn!(
+            "imported {} of {} issue nodes ({} malformed, skipped)",
+            out.len(),
+            arr.len(),
+            arr.len() - out.len()
+        );
+    }
+    Ok(out)
 }
 
 /// Parse the `issue { ... }` sub-object of a resolve query into `ResolvedIssue`.
@@ -432,5 +573,96 @@ mod tests {
         let ws: WorkflowState = serde_json::from_value(node).unwrap();
         assert_eq!(ws.name, "In Progress");
         assert_eq!(ws.state_type, "started");
+    }
+
+    #[test]
+    fn import_filter_without_label_is_assignee_only() {
+        let f = build_import_filter("team-1", None, "2026-04-01T00:00:00Z");
+        let and = f.get("and").and_then(Value::as_array).unwrap();
+        // team scope, terminal exclusion, updatedAt window, assignee clause.
+        assert_eq!(and.len(), 4);
+        assert_eq!(and[0].pointer("/team/id/eq").unwrap(), "team-1");
+        assert_eq!(
+            and[1].pointer("/state/type/nin").unwrap(),
+            &json!(["completed", "canceled"])
+        );
+        assert_eq!(
+            and[2].pointer("/updatedAt/gt").unwrap(),
+            "2026-04-01T00:00:00Z"
+        );
+        // No label → the who-clause is the bare assignee filter, not an `or`.
+        assert_eq!(and[3].pointer("/assignee/isMe/eq").unwrap(), &json!(true));
+        assert!(and[3].get("or").is_none());
+    }
+
+    #[test]
+    fn import_filter_with_label_is_assignee_or_label() {
+        let f = build_import_filter("team-1", Some("agent-eligible"), "2026-04-01T00:00:00Z");
+        let who = &f.get("and").and_then(Value::as_array).unwrap()[3];
+        let or = who.get("or").and_then(Value::as_array).unwrap();
+        assert_eq!(or.len(), 2);
+        assert_eq!(or[0].pointer("/assignee/isMe/eq").unwrap(), &json!(true));
+        assert_eq!(
+            or[1].pointer("/labels/some/name/eq").unwrap(),
+            "agent-eligible"
+        );
+    }
+
+    #[test]
+    fn parse_imported_issues_full_and_null_state() {
+        let nodes = json!([
+            { "id": "u1", "identifier": "JM-1", "title": "First", "url": "https://l/JM-1",
+              "state": { "id": "s1" } },
+            { "id": "u2", "identifier": "JM-2", "title": "Second", "url": "https://l/JM-2",
+              "state": null },
+        ]);
+        let out = parse_imported_issues(&nodes).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].title, "First");
+        assert_eq!(out[0].state_id.as_deref(), Some("s1"));
+        assert_eq!(out[1].identifier, "JM-2");
+        assert_eq!(out[1].state_id, None);
+    }
+
+    #[test]
+    fn parse_imported_issues_empty_is_ok() {
+        assert!(parse_imported_issues(&json!([])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_imported_issues_skips_malformed_node_keeps_rest() {
+        // A node missing a required scalar is logged and skipped — one corrupt
+        // record must not abort importing the valid ones in the same batch.
+        let nodes = json!([
+            { "id": "u1", "identifier": "JM-1", "url": "u", "state": null }, // no title
+            { "id": "u2", "identifier": "JM-2", "title": "Good", "url": "https://l/JM-2",
+              "state": null },
+        ]);
+        let out = parse_imported_issues(&nodes).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].identifier, "JM-2");
+    }
+
+    #[test]
+    fn parse_imported_issues_all_malformed_is_malformed() {
+        // A non-empty page where EVERY node is malformed is a systemic schema
+        // break, not a clean sweep — must surface terminal Malformed so inbound
+        // import can't silently stall on an empty-success path.
+        let nodes = json!([
+            { "id": "u1", "identifier": "JM-1", "url": "u", "state": null }, // no title
+            { "id": "u2", "identifier": "JM-2", "url": "u", "state": null }, // no title
+        ]);
+        assert!(matches!(
+            parse_imported_issues(&nodes).unwrap_err(),
+            LinearError::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn parse_imported_issues_non_array_is_malformed() {
+        assert!(matches!(
+            parse_imported_issues(&json!({ "not": "an array" })).unwrap_err(),
+            LinearError::Malformed(_)
+        ));
     }
 }

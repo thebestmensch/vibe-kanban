@@ -567,6 +567,17 @@
         "statePlaceholder": "Select a state",
         "saveMapping": "Save mapping"
       },
+      "import": {
+        "label": "Inbound import",
+        "helper": "Import this account's assigned Linear issues into this project as new cards.",
+        "enable": "Import assigned issues into this project",
+        "enableHelper": "Issues assigned to you (or carrying the label below), newest first, become cards within one poll cycle. Closed issues are skipped.",
+        "labelFilterLabel": "Also import by label",
+        "labelFilterHelper": "In addition to issues assigned to you, import any issue carrying this Linear label.",
+        "labelFilterPlaceholder": "Optional — e.g. agent-eligible",
+        "targetElsewhereWarning": "This account already imports into a different project. Enabling import here will move its single import target to this project, turning off inbound import for the other one.",
+        "save": "Save import settings"
+      },
       "errors": {
         "connectFailed": "Failed to connect account.",
         "workflowStatesFailed": "Failed to load Linear workflow states."
