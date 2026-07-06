@@ -105,11 +105,15 @@ import {
   SetStateMapBody,
   LinearWorkflowStateView,
   BindProjectBody,
+  ProjectLinearBindingView,
   LinkIssueBody,
   IssueLinkView,
   LinkedIssueView,
 } from 'shared/types';
-import type { Project as RemoteProject } from 'shared/remote-types';
+import type {
+  Project as RemoteProject,
+  ProjectStatus,
+} from 'shared/remote-types';
 import type { WorkspaceWithSession } from '@/shared/types/attempt';
 import { createWorkspaceWithSession } from '@/shared/types/attempt';
 import { resolveHostRequestScope } from '@/shared/lib/hostRequestScope';
@@ -190,6 +194,16 @@ export type Result<T, E> = Ok<T> | Err<E>;
 type ListRemoteProjectsResponse = {
   projects: RemoteProject[];
 };
+
+type ListRemoteProjectStatusesResponse = {
+  project_statuses: ProjectStatus[];
+};
+
+// Fixed organization id the local board seeds every project under
+// (`LOCAL_ORG_ID = Uuid::from_u128(1)` in crates/db/src/lib.rs). Used to
+// enumerate local projects from surfaces that lack ProjectContext (e.g. the
+// Settings dialog, which portals to document.body).
+export const LOCAL_BOARD_ORG_ID = '00000000-0000-0000-0000-000000000001';
 
 export type OrganizationBillingStatus =
   | 'free'
@@ -1492,6 +1506,16 @@ export const remoteProjectsApi = {
       await handleApiResponse<ListRemoteProjectsResponse>(response);
     return result.projects;
   },
+  listStatusesByProject: async (
+    projectId: string
+  ): Promise<ProjectStatus[]> => {
+    const response = await makeRequest(
+      `/api/remote/project-statuses?project_id=${encodeURIComponent(projectId)}`
+    );
+    const result =
+      await handleApiResponse<ListRemoteProjectStatusesResponse>(response);
+    return result.project_statuses;
+  },
 };
 
 // Scratch API
@@ -1748,6 +1772,14 @@ export const linearApi = {
       `/api/linear/accounts/${encodeURIComponent(key)}/workflow-states`
     );
     return handleApiResponse<LinearWorkflowStateView[]>(response);
+  },
+  getProjectBinding: async (
+    projectId: string
+  ): Promise<ProjectLinearBindingView> => {
+    const response = await makeRequest(
+      `/api/linear/projects/${projectId}/account`
+    );
+    return handleApiResponse<ProjectLinearBindingView>(response);
   },
   bindProject: async (
     projectId: string,

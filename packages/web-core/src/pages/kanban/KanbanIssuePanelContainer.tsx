@@ -8,6 +8,8 @@ import {
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
+import { linearApi } from '@/shared/lib/api';
 import type { OrganizationMemberWithProfile } from 'shared/types';
 import type { IssuePriority } from 'shared/remote-types';
 import { useDebouncedCallback } from '@/shared/hooks/useDebouncedCallback';
@@ -1022,6 +1024,38 @@ export function KanbanIssuePanelContainer({
     });
   }, [selectedKanbanIssueId, projectId]);
 
+  // Linear mirror (JM-718): the current card↔ticket link + open the manage
+  // dialog. Local-board feature — the badge/button render in local mode where
+  // team adornments are hidden.
+  const isLocalBoard = isLocalBoardMode();
+  const { data: linearLinks } = useQuery({
+    queryKey: ['linearLinks', projectId],
+    queryFn: () => linearApi.listProjectLinks(projectId),
+    enabled: isLocalBoard && !!projectId,
+  });
+  const linearLink = useMemo(() => {
+    if (!selectedKanbanIssueId) return null;
+    const link = linearLinks?.find((l) => l.issue_id === selectedKanbanIssueId);
+    return link
+      ? {
+          identifier: link.linear_issue_identifier,
+          url: link.linear_url,
+          syncPending: link.linear_sync_pending,
+        }
+      : null;
+  }, [linearLinks, selectedKanbanIssueId]);
+
+  const handleLinkToLinear = useCallback(async () => {
+    if (!selectedKanbanIssueId) return;
+    const { LinkToLinearIssueDialog } = await import(
+      '@/shared/dialogs/command-bar/LinkToLinearIssueDialog'
+    );
+    await LinkToLinearIssueDialog.show({
+      projectId,
+      issueId: selectedKanbanIssueId,
+    });
+  }, [selectedKanbanIssueId, projectId]);
+
   // Loading state
   const isLoading = projectLoading || orgLoading;
   const isResolvingExpectedIssue =
@@ -1056,6 +1090,8 @@ export function KanbanIssuePanelContainer({
       onRemoveParentIssue={handleRemoveParentIssue}
       linkedPrs={linkedPrs}
       onLinkPr={mode === 'edit' ? handleLinkPr : undefined}
+      linearLink={linearLink}
+      onLinkToLinear={mode === 'edit' ? handleLinkToLinear : undefined}
       onClose={closeKanbanIssuePanel}
       onSubmit={handleSubmit}
       onCmdEnterSubmit={handleCmdEnterSubmit}

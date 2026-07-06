@@ -306,6 +306,8 @@ export type BindProjectBody = {
  */
 account_key: string | null, };
 
+export type ProjectLinearBindingView = { account_key: string | null, };
+
 export type LinkIssueBody = { 
 /**
  * Team-key identifier, e.g. `OOM-123`.

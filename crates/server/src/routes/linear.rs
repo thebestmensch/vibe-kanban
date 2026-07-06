@@ -38,7 +38,10 @@ pub fn router() -> Router<DeploymentImpl> {
             "/linear/accounts/{key}/workflow-states",
             get(list_workflow_states),
         )
-        .route("/linear/projects/{id}/account", put(bind_project))
+        .route(
+            "/linear/projects/{id}/account",
+            get(get_project_binding).put(bind_project),
+        )
         .route("/linear/projects/{id}/links", get(list_project_links))
         .route(
             "/linear/issues/{id}/link",
@@ -96,6 +99,13 @@ pub struct LinearWorkflowStateView {
 #[derive(Debug, Deserialize, TS)]
 pub struct BindProjectBody {
     /// `None` unbinds the project.
+    pub account_key: Option<String>,
+}
+
+/// A project's current Linear account binding, so the settings editor can
+/// pre-fill the account dropdown and column→state grid on open.
+#[derive(Debug, Serialize, TS)]
+pub struct ProjectLinearBindingView {
     pub account_key: Option<String>,
 }
 
@@ -287,6 +297,17 @@ async fn list_workflow_states(
 }
 
 // --- Project binding --------------------------------------------------------
+
+/// Read a project's current Linear account binding (`id` is the project id).
+async fn get_project_binding(
+    State(deployment): State<DeploymentImpl>,
+    Path(id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<ProjectLinearBindingView>>, ApiError> {
+    let account_key = BoardProjects::linear_account_key(&deployment.db().pool, id).await?;
+    Ok(ResponseJson(ApiResponse::success(
+        ProjectLinearBindingView { account_key },
+    )))
+}
 
 async fn bind_project(
     State(deployment): State<DeploymentImpl>,

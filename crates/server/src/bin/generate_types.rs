@@ -107,6 +107,7 @@ fn generate_types_content() -> String {
         server::routes::linear::SetStateMapBody::decl(),
         server::routes::linear::LinearWorkflowStateView::decl(),
         server::routes::linear::BindProjectBody::decl(),
+        server::routes::linear::ProjectLinearBindingView::decl(),
         server::routes::linear::LinkIssueBody::decl(),
         server::routes::linear::IssueLinkView::decl(),
         server::routes::linear::LinkedIssueView::decl(),

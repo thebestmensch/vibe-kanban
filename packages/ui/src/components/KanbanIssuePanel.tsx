@@ -22,6 +22,7 @@ import {
   type IssueTagBase,
   type IssueTagsRowAddTagControlProps,
   type LinkedPullRequest as IssueTagsLinkedPullRequest,
+  type LinkedLinearIssue,
 } from './IssueTagsRow';
 import { PrimaryButton } from './PrimaryButton';
 import { Toggle } from './Toggle';
@@ -105,6 +106,8 @@ export interface KanbanIssuePanelProps {
   onRemoveParentIssue?: () => void;
   linkedPrs?: LinkedPullRequest[];
   onLinkPr?: () => void;
+  linearLink?: LinkedLinearIssue | null;
+  onLinkToLinear?: () => void;
 
   // Actions
   onClose: () => void;
@@ -176,6 +179,8 @@ export function KanbanIssuePanel({
   onRemoveParentIssue,
   linkedPrs = [],
   onLinkPr,
+  linearLink,
+  onLinkToLinear,
   onClose,
   onSubmit,
   onCmdEnterSubmit,
@@ -336,6 +341,21 @@ export function KanbanIssuePanel({
               onCreateTag={onCreateTag}
               renderAddTagControl={renderAddTagControl}
               onLinkPr={!isCreateMode ? onLinkPr : undefined}
+              disabled={isSubmitting}
+            />
+          </div>
+        )}
+
+        {/* Linear mirror link — shown in local mode where team adornments are
+            hidden. Reuses the links row with Linear-only props. */}
+        {!showAdornments && onLinkToLinear && (
+          <div className="px-base py-base border-b">
+            <IssueTagsRow
+              selectedTagIds={[]}
+              availableTags={[]}
+              linearLink={isCreateMode ? null : linearLink}
+              onLinkToLinear={!isCreateMode ? onLinkToLinear : undefined}
+              onTagsChange={() => {}}
               disabled={isSubmitting}
             />
           </div>
