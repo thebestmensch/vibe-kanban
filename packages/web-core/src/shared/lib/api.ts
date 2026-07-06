@@ -110,6 +110,7 @@ import {
   LinkIssueBody,
   IssueLinkView,
   LinkedIssueView,
+  ProjectClaudeVariantView,
 } from 'shared/types';
 import type {
   Project as RemoteProject,
@@ -1516,6 +1517,25 @@ export const remoteProjectsApi = {
     const result =
       await handleApiResponse<ListRemoteProjectStatusesResponse>(response);
     return result.project_statuses;
+  },
+  // JM-735: per-project default Claude executor variant (account).
+  getClaudeVariant: async (
+    projectId: string
+  ): Promise<ProjectClaudeVariantView> => {
+    const response = await makeRequest(
+      `/api/remote/projects/${encodeURIComponent(projectId)}/claude-variant`
+    );
+    return handleApiResponse<ProjectClaudeVariantView>(response);
+  },
+  setClaudeVariant: async (
+    projectId: string,
+    variant: string | null
+  ): Promise<ProjectClaudeVariantView> => {
+    const response = await makeRequest(
+      `/api/remote/projects/${encodeURIComponent(projectId)}/claude-variant`,
+      { method: 'PUT', body: JSON.stringify({ variant }) }
+    );
+    return handleApiResponse<ProjectClaudeVariantView>(response);
   },
 };
 

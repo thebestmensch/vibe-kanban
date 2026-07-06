@@ -245,6 +245,39 @@ impl BoardProjects {
         Ok(())
     }
 
+    /// Read a project's default Claude executor variant (JM-735). `None` = no
+    /// per-project default (fresh spawns fall through to the global default).
+    /// Kept off the `api_types::Project` DTO (like `linear_account_key`) so the
+    /// remote/Electric project shape is untouched — it is a local-only binding.
+    pub async fn claude_account_variant(
+        pool: &SqlitePool,
+        id: Uuid,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query!(
+            r#"SELECT claude_account_variant FROM projects WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.and_then(|r| r.claude_account_variant))
+    }
+
+    /// Set (or clear, with `None`) a project's default Claude executor variant.
+    pub async fn set_claude_account_variant(
+        pool: &SqlitePool,
+        id: Uuid,
+        variant: Option<String>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE projects SET claude_account_variant = $2 WHERE id = $1"#,
+            id,
+            variant
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     // NOTE: no board delete. `projects` is the shared workspace/task table — its
     // `id` is referenced with ON DELETE CASCADE by legacy local subsystems
     // (`tasks`, `task_attempts`, `project_repos`, …), and the v1 migration
