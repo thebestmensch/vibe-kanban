@@ -341,21 +341,29 @@ fn build_import_filter(team_id: &str, label: Option<&str>, updated_after: &str) 
 }
 
 /// Parse the `issues.nodes` array of the import sweep into `ImportedIssue`s.
-/// Split out for unit testing without a live GraphQL round-trip. A node missing
-/// a required scalar (`id`/`identifier`/`title`/`url`) is a protocol error
-/// (terminal `Malformed`), not silently dropped.
+/// Split out for unit testing without a live GraphQL round-trip. The array shape
+/// itself is a protocol contract (terminal `Malformed` if not an array). A
+/// single node missing a required scalar (`id`/`identifier`/`title`/`url`) is
+/// logged and skipped rather than aborting the whole batch — one corrupt record
+/// must not block importing every other issue. But a non-empty page where EVERY
+/// node is malformed is a systemic schema break (e.g. Linear renamed/dropped a
+/// required field), which must surface as a terminal `Malformed` rather than a
+/// silent empty success — otherwise inbound import stops indefinitely with only
+/// per-node warnings and no operator-visible failure.
 fn parse_imported_issues(nodes: &Value) -> Result<Vec<ImportedIssue>, LinearError> {
     let arr = nodes
         .as_array()
         .ok_or_else(|| LinearError::Malformed("issues.nodes not an array".into()))?;
-    arr.iter()
-        .map(|n| {
-            let field = |name: &str| {
-                n.get(name)
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .ok_or_else(|| LinearError::Malformed(format!("issue.{name} missing")))
-            };
+    let mut out = Vec::with_capacity(arr.len());
+    let mut last_err: Option<LinearError> = None;
+    for n in arr {
+        let field = |name: &str| {
+            n.get(name)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| LinearError::Malformed(format!("issue.{name} missing")))
+        };
+        let parsed = || -> Result<ImportedIssue, LinearError> {
             Ok(ImportedIssue {
                 id: field("id")?,
                 identifier: field("identifier")?,
@@ -366,8 +374,31 @@ fn parse_imported_issues(nodes: &Value) -> Result<Vec<ImportedIssue>, LinearErro
                     .and_then(Value::as_str)
                     .map(str::to_string),
             })
-        })
-        .collect()
+        };
+        match parsed() {
+            Ok(issue) => out.push(issue),
+            Err(e) => {
+                tracing::warn!("skipping malformed import issue node: {e}");
+                last_err = Some(e);
+            }
+        }
+    }
+    // A non-empty page that yielded zero valid issues is a schema break, not a
+    // clean sweep — surface it so the monitor's empty-result path can't mask it.
+    if out.is_empty() && !arr.is_empty() {
+        return Err(
+            last_err.unwrap_or_else(|| LinearError::Malformed("all issue nodes malformed".into()))
+        );
+    }
+    if out.len() < arr.len() {
+        tracing::warn!(
+            "imported {} of {} issue nodes ({} malformed, skipped)",
+            out.len(),
+            arr.len(),
+            arr.len() - out.len()
+        );
+    }
+    Ok(out)
 }
 
 /// Parse the `issue { ... }` sub-object of a resolve query into `ResolvedIssue`.
@@ -599,9 +630,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_imported_issues_missing_title_is_malformed() {
-        // A required scalar missing is a terminal protocol error, not a drop.
-        let nodes = json!([{ "id": "u1", "identifier": "JM-1", "url": "u", "state": null }]);
+    fn parse_imported_issues_skips_malformed_node_keeps_rest() {
+        // A node missing a required scalar is logged and skipped — one corrupt
+        // record must not abort importing the valid ones in the same batch.
+        let nodes = json!([
+            { "id": "u1", "identifier": "JM-1", "url": "u", "state": null }, // no title
+            { "id": "u2", "identifier": "JM-2", "title": "Good", "url": "https://l/JM-2",
+              "state": null },
+        ]);
+        let out = parse_imported_issues(&nodes).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].identifier, "JM-2");
+    }
+
+    #[test]
+    fn parse_imported_issues_all_malformed_is_malformed() {
+        // A non-empty page where EVERY node is malformed is a systemic schema
+        // break, not a clean sweep — must surface terminal Malformed so inbound
+        // import can't silently stall on an empty-success path.
+        let nodes = json!([
+            { "id": "u1", "identifier": "JM-1", "url": "u", "state": null }, // no title
+            { "id": "u2", "identifier": "JM-2", "url": "u", "state": null }, // no title
+        ]);
         assert!(matches!(
             parse_imported_issues(&nodes).unwrap_err(),
             LinearError::Malformed(_)

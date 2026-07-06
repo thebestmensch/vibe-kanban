@@ -225,6 +225,13 @@ async fn connect_account(
     }
 
     let key = body.key.trim().to_string();
+    let ConnectLinearAccountBody {
+        token,
+        workspace_name,
+        team_id,
+        ..
+    } = body;
+
     // Carry forward the existing account's team-scoped settings on re-connect —
     // but ONLY when the Linear team is unchanged. A token refresh (same team)
     // must not wipe the column map or import target; a reconnect that repoints
@@ -232,33 +239,38 @@ async fn connect_account(
     // keyed to the old team's workflow states, and the import target is a board
     // configured for the old team), so preserving them would push to the wrong
     // states or bulk-import unrelated issues. Clear on a team change.
-    let previous = deployment
-        .config()
-        .read()
-        .await
-        .linear
-        .accounts
-        .get(&key)
-        .cloned();
-    let (existing_state_map, existing_target, existing_label) =
-        preserved_on_reconnect(previous.as_ref(), body.team_id.as_deref());
-
-    let account = LinearAccount {
-        token: Some(body.token),
-        workspace_name: body.workspace_name,
-        team_id: body.team_id,
-        state_map: existing_state_map,
-        import_target_project_id: existing_target,
-        import_label: existing_label,
-    };
-    let view = LinearAccountView::of(&key, &account);
-
-    persist_linear(&deployment, |linear| {
-        linear.accounts.insert(key, account);
+    //
+    // The lookup + preserve decision + insert all run inside persist_linear's
+    // write-lock closure so a concurrent set_state_map/set_import_config can't
+    // commit between a read-snapshot and this insert and be silently rolled back.
+    let key_for_insert = key.clone();
+    persist_linear(&deployment, move |linear| {
+        let previous = linear.accounts.get(&key_for_insert).cloned();
+        let (state_map, import_target_project_id, import_label) =
+            preserved_on_reconnect(previous.as_ref(), team_id.as_deref());
+        linear.accounts.insert(
+            key_for_insert,
+            LinearAccount {
+                token: Some(token),
+                workspace_name,
+                team_id,
+                state_map,
+                import_target_project_id,
+                import_label,
+            },
+        );
     })
     .await?;
 
-    Ok(ResponseJson(ApiResponse::success(view)))
+    let cfg = deployment.config().read().await;
+    let account = cfg
+        .linear
+        .accounts
+        .get(&key)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown Linear account '{key}'")))?;
+    Ok(ResponseJson(ApiResponse::success(LinearAccountView::of(
+        &key, account,
+    ))))
 }
 
 async fn remove_account(

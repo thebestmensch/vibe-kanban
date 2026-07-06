@@ -1187,7 +1187,9 @@ pub fn resolve_import_status(
     if let Some(state) = incoming_state_id {
         let mut matched: Vec<&ProjectStatus> = statuses
             .iter()
-            .filter(|s| state_map.get(&s.id.to_string()).map(String::as_str) == Some(state))
+            .filter(|s| {
+                !s.hidden && state_map.get(&s.id.to_string()).map(String::as_str) == Some(state)
+            })
             .collect();
         if !matched.is_empty() {
             matched.sort_by_key(|s| (s.sort_order, s.created_at));
@@ -1259,6 +1261,17 @@ mod import_tests {
         // Deliberately pass rightmost first to prove ordering, not input order.
         let got = resolve_import_status(&[rightmost.clone(), leftmost.clone()], &map, Some("S"));
         assert_eq!(got, Some(leftmost.id));
+    }
+
+    #[test]
+    fn resolve_mapped_hidden_falls_back_to_visible() {
+        // A hidden column mapped to the incoming state must NOT swallow the card;
+        // the mapped branch skips it and falls through to the leftmost visible.
+        let hidden_mapped = status(0, true);
+        let visible = status(1, false);
+        let map = HashMap::from([(hidden_mapped.id.to_string(), "S".to_string())]);
+        let got = resolve_import_status(&[hidden_mapped, visible.clone()], &map, Some("S"));
+        assert_eq!(got, Some(visible.id));
     }
 
     #[test]

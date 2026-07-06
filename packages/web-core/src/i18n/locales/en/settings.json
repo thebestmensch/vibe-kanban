@@ -575,6 +575,7 @@
         "labelFilterLabel": "Also import by label",
         "labelFilterHelper": "In addition to issues assigned to you, import any issue carrying this Linear label.",
         "labelFilterPlaceholder": "Optional — e.g. agent-eligible",
+        "targetElsewhereWarning": "This account already imports into a different project. Enabling import here will move its single import target to this project, turning off inbound import for the other one.",
         "save": "Save import settings"
       },
       "errors": {

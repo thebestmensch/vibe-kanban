@@ -312,6 +312,14 @@ function LinearProjectSyncCard() {
   const importEnabled =
     !!boundAccount?.import_target_project_id &&
     boundAccount.import_target_project_id === selectedProjectId;
+  // `import_target_project_id` is a single field on the ACCOUNT (account→project
+  // is N:1), not per-project. If two board projects share this account and the
+  // account's import target already points at a DIFFERENT project, enabling
+  // import here reassigns that single target away from the other project. Warn
+  // so the operator knows this control is account-scoped, not isolated.
+  const importTargetElsewhere =
+    !!boundAccount?.import_target_project_id &&
+    boundAccount.import_target_project_id !== selectedProjectId;
   const [draftImportOn, setDraftImportOn] = useState(false);
   const [draftLabel, setDraftLabel] = useState('');
   const [importSeededFor, setImportSeededFor] = useState<string | null>(null);
@@ -483,6 +491,11 @@ function LinearProjectSyncCard() {
               description={t('settings.linear.import.helper')}
             >
               <div className="space-y-3">
+                {importTargetElsewhere && (
+                  <p className="text-sm text-warning">
+                    {t('settings.linear.import.targetElsewhereWarning')}
+                  </p>
+                )}
                 <SettingsCheckbox
                   id="linear-import-enabled"
                   label={t('settings.linear.import.enable')}
