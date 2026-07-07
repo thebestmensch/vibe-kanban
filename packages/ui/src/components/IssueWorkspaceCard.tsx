@@ -1,3 +1,5 @@
+import { Fragment } from 'react';
+import type { CheckStatus } from 'shared/types';
 import { cn } from '../lib/cn';
 import { useTranslation } from 'react-i18next';
 import {
@@ -13,6 +15,7 @@ import {
 } from '@phosphor-icons/react';
 import { UserAvatar, type UserAvatarUser } from './UserAvatar';
 import { RunningDots } from './RunningDots';
+import { PrChecksBadge } from './PrChecksBadge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +27,14 @@ export interface WorkspacePr {
   number: number;
   url: string;
   status: 'open' | 'merged' | 'closed';
+  /**
+   * Aggregated CI-check status (JM-751). `null`/`no_checks` renders no badge.
+   * Kept in sync with the direct-issue PR path in `KanbanCardContent`: when
+   * `showWorkspaces` is on, a workspace-attached PR renders HERE instead of at
+   * the issue level (the issue-level list dedupes it out), so the check badge
+   * must live here too or it silently vanishes.
+   */
+  checkStatus?: CheckStatus | null;
 }
 
 export interface WorkspaceWithStats {
@@ -296,24 +307,26 @@ export function IssueWorkspaceCard({
         <div className="hidden sm:flex items-center gap-half shrink-0">
           {workspace.prs.length > 0 ? (
             workspace.prs.map((pr) => (
-              <a
-                key={pr.number}
-                href={pr.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className={cn(
-                  'flex items-center gap-half px-1.5 py-0.5 rounded text-xs font-medium transition-colors',
-                  pr.status === 'merged'
-                    ? 'bg-merged/10 text-merged hover:bg-merged/20'
-                    : pr.status === 'closed'
-                      ? 'bg-error/10 text-error hover:bg-error/20'
-                      : 'bg-success/10 text-success hover:bg-success/20'
-                )}
-              >
-                <GitPullRequestIcon className="size-icon-2xs" weight="bold" />
-                <span>#{pr.number}</span>
-              </a>
+              <Fragment key={pr.number}>
+                <a
+                  href={pr.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className={cn(
+                    'flex items-center gap-half px-1.5 py-0.5 rounded text-xs font-medium transition-colors',
+                    pr.status === 'merged'
+                      ? 'bg-merged/10 text-merged hover:bg-merged/20'
+                      : pr.status === 'closed'
+                        ? 'bg-error/10 text-error hover:bg-error/20'
+                        : 'bg-success/10 text-success hover:bg-success/20'
+                  )}
+                >
+                  <GitPullRequestIcon className="size-icon-2xs" weight="bold" />
+                  <span>#{pr.number}</span>
+                </a>
+                <PrChecksBadge status={pr.checkStatus} />
+              </Fragment>
             ))
           ) : showNoPrText ? (
             <span className="text-xs text-low whitespace-nowrap">

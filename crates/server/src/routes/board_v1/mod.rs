@@ -22,7 +22,7 @@ use axum::{
 use chrono::Utc;
 use db::{
     LOCAL_ORG_ID,
-    models::board::{BoardProjects, BoardPullRequests, Issues, ProjectStatuses},
+    models::board::{BoardProjects, BoardPullRequests, BoardWorkspaces, Issues, ProjectStatuses},
 };
 use deployment::Deployment;
 use serde::Deserialize;
@@ -44,6 +44,10 @@ pub fn router() -> Router<DeploymentImpl> {
         .route(
             "/fallback/pull_request_issues",
             get(fallback_pull_request_issues),
+        )
+        .route(
+            "/fallback/project_workspaces",
+            get(fallback_project_workspaces),
         )
         .route("/fallback/{table}", get(fallback_stub))
         .merge(mutations::router())
@@ -145,8 +149,25 @@ async fn fallback_pull_request_issues(
     Ok(snapshot("pull_request_issues", links))
 }
 
+/// JM-751: local workspaces shaped for the board card's `project_workspaces`
+/// fallback. The snapshot key is `workspaces` (the shape's `table` string), which
+/// diverges from the `project_workspaces` URL segment — cf. the stub's
+/// segment→table remap below. Joins issue → workspace via the JM-749
+/// `workspaces.issue_id` link. `branch` + running-agent chips are NOT in this
+/// snapshot: the card enriches them client-side from the already-served
+/// `/api/workspaces` sidebar stream, keyed by `local_workspace_id` (== the row
+/// `id` in local mode). PRs attached to these workspaces render under the
+/// workspace sub-card via `pull_requests.workspace_id == workspace.id`.
+async fn fallback_project_workspaces(
+    State(deployment): State<DeploymentImpl>,
+    Query(query): Query<ProjectScoped>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let rows = BoardWorkspaces::list_by_project(&deployment.db().pool, query.project_id).await?;
+    Ok(snapshot("workspaces", rows))
+}
+
 /// Empty snapshot for every board-adjacent shape without a local backend yet
-/// (comments, reactions, tags, assignees, relationships, PRs, workspaces, …).
+/// (comments, reactions, tags, assignees, relationships, …).
 /// These are non-blocking for board render; returning an empty array with the
 /// correct table key keeps `extractFallbackRows` happy so no sync error fires.
 ///

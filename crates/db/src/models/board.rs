@@ -1376,6 +1376,115 @@ impl BoardPullRequests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Workspaces (board fallback shape — JM-751)
+// ---------------------------------------------------------------------------
+
+/// One local workspace joined to the board issue it belongs to. Internal query
+/// shape only; mapped into `BoardWorkspaceRow` (which injects the local-mode
+/// sentinel/None fields the `workspaces` table doesn't carry).
+struct WsJoinRow {
+    id: Uuid,
+    project_id: Uuid,
+    issue_id: Uuid,
+    name: Option<String>,
+    archived: bool,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// A local workspace shaped for the board's `project_workspaces` Electric
+/// fallback snapshot (JM-751). Columns match `shared/remote-types.ts` `Workspace`
+/// EXACTLY — no extra fields, so unlike `BoardPullRequestRow` there is no
+/// schema-strip hazard to guard.
+///
+/// Local-mode field collapse: there is no remote/local workspace split, so `id`
+/// and `local_workspace_id` are BOTH the local `Workspace.id`. That single value
+/// satisfies two independent client-side joins:
+///   - `pr.workspace_id == workspace.id` (PR → workspace card, `prsByWorkspaceId`
+///     in `KanbanContainer.tsx`), and
+///   - `workspace.local_workspace_id ==` a live sidebar-stream key
+///     (`localWorkspacesById`, keyed by local workspace id) → the client merges in
+///     `branch` + `runningAgents` from the already-served `/api/workspaces`
+///     stream. Those two runtime fields are therefore deliberately NOT emitted
+///     here — emitting them would be dead weight the card ignores.
+///
+/// `owner_user_id` is the `LOCAL_USER_ID` sentinel. Diff stats
+/// (`files_changed`/`lines_added`/`lines_removed`) are `None` — the local
+/// `workspaces` table has no diff columns, so the card shows "0 changed" (a known
+/// cosmetic gap; the branch/agent chips, the JM-751 goal, are unaffected).
+#[derive(Debug, Serialize)]
+pub struct BoardWorkspaceRow {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub owner_user_id: Uuid,
+    pub issue_id: Uuid,
+    pub local_workspace_id: Uuid,
+    pub name: Option<String>,
+    pub archived: bool,
+    pub files_changed: Option<i64>,
+    pub lines_added: Option<i64>,
+    pub lines_removed: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Namespace for reading local workspaces in the board fallback shape.
+pub struct BoardWorkspaces;
+
+impl BoardWorkspaces {
+    /// Every local workspace linked to an issue in `project_id`, shaped for the
+    /// `project_workspaces` board fallback. Scoping walks `workspaces →
+    /// issues.project_id` through the JM-749 `workspaces.issue_id` link; the INNER
+    /// JOIN excludes ad-hoc (issue-less) workspaces and guarantees `issue_id` is
+    /// non-null in the result (a NULL `issue_id` matches no `issues.id`). The
+    /// frontend further filters to non-archived workspaces that have a live
+    /// sidebar-stream entry, so archived rows are emitted verbatim and dropped
+    /// client-side.
+    pub async fn list_by_project(
+        pool: &SqlitePool,
+        project_id: Uuid,
+    ) -> Result<Vec<BoardWorkspaceRow>, sqlx::Error> {
+        let rows = sqlx::query_as!(
+            WsJoinRow,
+            r#"SELECT w.id         as "id!: Uuid",
+                      i.project_id as "project_id!: Uuid",
+                      w.issue_id   as "issue_id!: Uuid",
+                      w.name,
+                      w.archived   as "archived!: bool",
+                      w.created_at as "created_at!: DateTime<Utc>",
+                      w.updated_at as "updated_at!: DateTime<Utc>"
+               FROM workspaces w
+               JOIN issues i ON w.issue_id = i.id
+               WHERE i.project_id = $1"#,
+            project_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| BoardWorkspaceRow {
+                id: r.id,
+                project_id: r.project_id,
+                owner_user_id: crate::LOCAL_USER_ID,
+                issue_id: r.issue_id,
+                // Local mode: the workspace IS the local workspace, so both the
+                // PR-link key (`id`) and the sidebar-merge key
+                // (`local_workspace_id`) are the same UUID.
+                local_workspace_id: r.id,
+                name: r.name,
+                archived: r.archived,
+                files_changed: None,
+                lines_added: None,
+                lines_removed: None,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+            })
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod import_tests {
     use std::collections::HashMap;
@@ -1386,7 +1495,7 @@ mod import_tests {
     use uuid::Uuid;
 
     use super::{
-        BoardProjects, BoardPullRequests, ImportCard, Issues, ProjectStatuses,
+        BoardProjects, BoardPullRequests, BoardWorkspaces, ImportCard, Issues, ProjectStatuses,
         resolve_import_status,
     };
     use crate::models::{
@@ -1689,6 +1798,62 @@ mod import_tests {
         assert_eq!(
             prs[0].status, "closed",
             "Unknown must collapse to closed, never leak as a green open PR"
+        );
+    }
+
+    // --- BoardWorkspaces::list_by_project (JM-751) ---------------------------
+
+    #[tokio::test]
+    async fn board_workspaces_scope_to_issue_and_collapse_local_ids() {
+        let (pool, project_id, issue_id) = project_with_issue().await;
+
+        // Issue-linked workspace — in scope.
+        let ws = Workspace::create(
+            &pool,
+            &CreateWorkspace {
+                branch: "feat/x".into(),
+                name: Some("W1".into()),
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        Workspace::set_issue_id(&pool, ws.id, issue_id)
+            .await
+            .unwrap();
+
+        // Ad-hoc workspace (no issue link) — MUST be excluded by the INNER JOIN.
+        Workspace::create(
+            &pool,
+            &CreateWorkspace {
+                branch: "feat/adhoc".into(),
+                name: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+
+        let rows = BoardWorkspaces::list_by_project(&pool, project_id)
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1, "only the issue-linked workspace is in scope");
+        let row = &rows[0];
+        assert_eq!(row.id, ws.id);
+        assert_eq!(row.issue_id, issue_id);
+        assert_eq!(row.project_id, project_id);
+        assert_eq!(row.name.as_deref(), Some("W1"));
+        assert!(!row.archived);
+        // Local-mode collapse: both client-join keys resolve to the workspace id.
+        assert_eq!(
+            row.local_workspace_id, ws.id,
+            "local_workspace_id must equal id so the sidebar-stream merge (branch/agents) resolves"
+        );
+        assert_eq!(
+            row.owner_user_id,
+            crate::LOCAL_USER_ID,
+            "owner is the local sentinel"
         );
     }
 }

@@ -619,6 +619,12 @@ export function KanbanContainer() {
         number: pr.number,
         url: pr.url,
         status: pr.status as 'open' | 'merged' | 'closed',
+        // JM-751: carry the LOCAL fallback's extra `check_status` (see board.rs
+        // `BoardPullRequestRow`) onto the workspace-attached PR so the check
+        // badge survives when a PR renders under its workspace card instead of
+        // at the issue level. Read defensively — absent in remote/Electric mode.
+        checkStatus:
+          (pr as { check_status?: CheckStatus | null }).check_status ?? null,
       });
       map.set(pr.workspace_id, prs);
     }
