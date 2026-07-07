@@ -13,8 +13,11 @@ use api_types::{
     UpdateProjectRequest, UpdateProjectStatusRequest,
 };
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
+
+use super::merge::{CheckStatus, MergeStatus};
 
 /// Default column set seeded for every project so the board renders. Mirrors the
 /// local `TaskStatus` set (todo / inprogress / inreview / done / cancelled).
@@ -1236,16 +1239,161 @@ pub fn resolve_import_status(
         .map(|s| s.id)
 }
 
+// ---------------------------------------------------------------------------
+// Pull requests (board fallback shapes — JM-749)
+// ---------------------------------------------------------------------------
+
+/// One local PR joined to the board issue it belongs to (through its workspace).
+/// Internal query shape only; mapped into the two serde row types below.
+struct PrJoinRow {
+    id: String,
+    pr_url: String,
+    pr_number: i64,
+    pr_status: MergeStatus,
+    merged_at: Option<DateTime<Utc>>,
+    merge_commit_sha: Option<String>,
+    target_branch_name: String,
+    project_id: Uuid,
+    issue_id: Uuid,
+    workspace_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    check_status: Option<CheckStatus>,
+}
+
+/// A local PR shaped for the board's `pull_requests` Electric fallback snapshot.
+/// Columns match `shared/remote-types.ts` `PullRequest` EXACTLY, plus ONE extra:
+/// `check_status` (JM-749).
+///
+/// The `check_status` field is NOT declared on the generated Electric
+/// `PullRequest` type. It survives to the card because the local fallback
+/// collection is created with no schema to strip unknown keys (see
+/// `packages/web-core/src/shared/lib/electric/collections.ts`
+/// `createShapeCollection` — no `schema` arg → TanStack DB stores rows verbatim).
+/// READ SITE: `KanbanContainer.tsx` issue-level PR mapping reads `pr.check_status`
+/// and feeds `PrChecksBadge`. If a future rebase attaches a Standard Schema to
+/// these collections, this field vanishes silently — keep emit + read in sync.
+#[derive(Debug, Serialize)]
+pub struct BoardPullRequestRow {
+    pub id: String,
+    pub url: String,
+    pub number: i64,
+    pub status: &'static str,
+    pub merged_at: Option<DateTime<Utc>>,
+    pub merge_commit_sha: Option<String>,
+    pub target_branch_name: String,
+    pub project_id: Uuid,
+    pub issue_id: Uuid,
+    pub workspace_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub check_status: Option<CheckStatus>,
+}
+
+/// A synthesized `pull_request_issues` join row (JM-749). No local table exists;
+/// the frontend's `getPullRequestsForIssue` matches PRs to an issue THROUGH this
+/// shape, so it must be populated for a PR to appear on a card. `id ==
+/// pull_request_id == pull_requests.id`: each local PR maps to exactly one issue
+/// (via its single workspace), so `pr.id` is a collision-proof key. NEVER derive
+/// `id` from `issue_id` — an issue with two PRs would collide and one PR would
+/// vanish from the card.
+#[derive(Debug, Serialize)]
+pub struct BoardPullRequestIssueRow {
+    pub id: String,
+    pub pull_request_id: String,
+    pub issue_id: Uuid,
+}
+
+/// Namespace for reading local pull requests in the board fallback shapes.
+pub struct BoardPullRequests;
+
+impl BoardPullRequests {
+    /// Every local PR whose workspace is linked to an issue in `project_id`,
+    /// shaped for both the `pull_requests` and `pull_request_issues` board
+    /// fallbacks. Scoping walks `pull_requests → workspaces → issues.project_id`;
+    /// the INNER JOINs exclude PRs on ad-hoc (issue-less) workspaces.
+    pub async fn list_by_project(
+        pool: &SqlitePool,
+        project_id: Uuid,
+    ) -> Result<(Vec<BoardPullRequestRow>, Vec<BoardPullRequestIssueRow>), sqlx::Error> {
+        let rows = sqlx::query_as!(
+            PrJoinRow,
+            r#"SELECT pr.id                 as "id!",
+                      pr.pr_url             as "pr_url!",
+                      pr.pr_number          as "pr_number!: i64",
+                      pr.pr_status          as "pr_status!: MergeStatus",
+                      pr.merged_at          as "merged_at: DateTime<Utc>",
+                      pr.merge_commit_sha,
+                      pr.target_branch_name as "target_branch_name!",
+                      i.project_id          as "project_id!: Uuid",
+                      w.issue_id            as "issue_id!: Uuid",
+                      pr.workspace_id       as "workspace_id: Uuid",
+                      pr.created_at         as "created_at!: DateTime<Utc>",
+                      pr.updated_at         as "updated_at!: DateTime<Utc>",
+                      pr.check_status       as "check_status: CheckStatus"
+               FROM pull_requests pr
+               JOIN workspaces w ON pr.workspace_id = w.id
+               JOIN issues i     ON w.issue_id = i.id
+               WHERE i.project_id = $1"#,
+            project_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut prs = Vec::with_capacity(rows.len());
+        let mut links = Vec::with_capacity(rows.len());
+        for r in rows {
+            links.push(BoardPullRequestIssueRow {
+                id: r.id.clone(),
+                pull_request_id: r.id.clone(),
+                issue_id: r.issue_id,
+            });
+            prs.push(BoardPullRequestRow {
+                id: r.id,
+                url: r.pr_url,
+                number: r.pr_number,
+                // `Unknown` is not a valid Electric PullRequestStatus
+                // (open|merged|closed); collapse it to `closed` so it can't leak
+                // through as a green "open" PR — PrBadge treats any unrecognized
+                // value as open.
+                status: match r.pr_status {
+                    MergeStatus::Open => "open",
+                    MergeStatus::Merged => "merged",
+                    MergeStatus::Closed | MergeStatus::Unknown => "closed",
+                },
+                merged_at: r.merged_at,
+                merge_commit_sha: r.merge_commit_sha,
+                target_branch_name: r.target_branch_name,
+                project_id: r.project_id,
+                issue_id: r.issue_id,
+                workspace_id: r.workspace_id,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                check_status: r.check_status,
+            });
+        }
+        Ok((prs, links))
+    }
+}
+
 #[cfg(test)]
 mod import_tests {
     use std::collections::HashMap;
 
-    use api_types::{CreateProjectRequest, ProjectStatus};
+    use api_types::{CreateIssueRequest, CreateProjectRequest, ProjectStatus};
     use chrono::{TimeZone, Utc};
     use sqlx::SqlitePool;
     use uuid::Uuid;
 
-    use super::{BoardProjects, ImportCard, Issues, ProjectStatuses, resolve_import_status};
+    use super::{
+        BoardProjects, BoardPullRequests, ImportCard, Issues, ProjectStatuses,
+        resolve_import_status,
+    };
+    use crate::models::{
+        merge::{CheckStatus, MergeStatus},
+        pull_request::PullRequest,
+        workspace::{CreateWorkspace, Workspace},
+    };
 
     fn status(sort_order: i32, hidden: bool) -> ProjectStatus {
         ProjectStatus {
@@ -1397,6 +1545,151 @@ mod import_tests {
         let links = Issues::list_linear_links(&pool, project.id).await.unwrap();
         assert_eq!(links.len(), 2);
         assert!(links.iter().all(|l| l.linear_sync_pending == 0));
+    }
+
+    // --- BoardPullRequests::list_by_project (JM-749) -------------------------
+
+    /// Seed a board project with one issue, then return (pool, project_id,
+    /// issue_id) ready for workspace/PR attachment.
+    async fn project_with_issue() -> (SqlitePool, Uuid, Uuid) {
+        let pool = mem_pool().await;
+        let project = BoardProjects::create(
+            &pool,
+            &CreateProjectRequest {
+                id: None,
+                organization_id: crate::LOCAL_ORG_ID,
+                name: "Board".into(),
+                color: "#abc".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let status_id = ProjectStatuses::list_by_project(&pool, project.id)
+            .await
+            .unwrap()[0]
+            .id;
+        let issue = Issues::create(
+            &pool,
+            &CreateIssueRequest {
+                id: None,
+                project_id: project.id,
+                status_id,
+                title: "I1".into(),
+                description: None,
+                priority: None,
+                start_date: None,
+                target_date: None,
+                completed_at: None,
+                sort_order: 0.0,
+                parent_issue_id: None,
+                parent_issue_sort_order: None,
+                extension_metadata: serde_json::json!({}),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        (pool, project.id, issue.id)
+    }
+
+    #[tokio::test]
+    async fn board_prs_scope_to_issue_linked_workspaces_and_carry_check_status() {
+        let (pool, project_id, issue_id) = project_with_issue().await;
+
+        // Issue-linked workspace + open PR with a passing check.
+        let ws = Workspace::create(
+            &pool,
+            &CreateWorkspace {
+                branch: "b1".into(),
+                name: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        Workspace::set_issue_id(&pool, ws.id, issue_id)
+            .await
+            .unwrap();
+        let pr = PullRequest::create(&pool, Some(ws.id), None, "https://x/1", 1, "main")
+            .await
+            .unwrap();
+        PullRequest::update_check_status(&pool, &pr.pr_url, Some(CheckStatus::Passing))
+            .await
+            .unwrap();
+
+        // Ad-hoc workspace (no issue link) + its PR — MUST be excluded by the
+        // INNER JOIN through issues.project_id.
+        let adhoc = Workspace::create(
+            &pool,
+            &CreateWorkspace {
+                branch: "b2".into(),
+                name: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        PullRequest::create(&pool, Some(adhoc.id), None, "https://x/2", 2, "main")
+            .await
+            .unwrap();
+
+        let (prs, links) = BoardPullRequests::list_by_project(&pool, project_id)
+            .await
+            .unwrap();
+
+        assert_eq!(prs.len(), 1, "only the issue-linked PR is in scope");
+        let row = &prs[0];
+        assert_eq!(row.id, pr.id);
+        assert_eq!(row.issue_id, issue_id);
+        assert_eq!(row.project_id, project_id);
+        assert_eq!(row.workspace_id, Some(ws.id));
+        assert_eq!(row.status, "open");
+        assert_eq!(
+            row.check_status,
+            Some(CheckStatus::Passing),
+            "check status passes through to the fallback row"
+        );
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].id, pr.id,
+            "link id == pull_request_id == pr.id (collision-proof synthetic key)"
+        );
+        assert_eq!(links[0].pull_request_id, pr.id);
+        assert_eq!(links[0].issue_id, issue_id);
+    }
+
+    #[tokio::test]
+    async fn board_prs_collapse_unknown_status_to_closed() {
+        let (pool, project_id, issue_id) = project_with_issue().await;
+        let ws = Workspace::create(
+            &pool,
+            &CreateWorkspace {
+                branch: "b1".into(),
+                name: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        Workspace::set_issue_id(&pool, ws.id, issue_id)
+            .await
+            .unwrap();
+        let pr = PullRequest::create(&pool, Some(ws.id), None, "https://x/1", 1, "main")
+            .await
+            .unwrap();
+        PullRequest::update_status(&pool, &pr.pr_url, &MergeStatus::Unknown, None, None)
+            .await
+            .unwrap();
+
+        let (prs, _links) = BoardPullRequests::list_by_project(&pool, project_id)
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(
+            prs[0].status, "closed",
+            "Unknown must collapse to closed, never leak as a green open PR"
+        );
     }
 }
 

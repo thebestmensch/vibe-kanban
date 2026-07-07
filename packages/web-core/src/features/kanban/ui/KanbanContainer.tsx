@@ -44,7 +44,7 @@ import {
   type ProjectIssueCreateOptions,
   useKanbanIssueComposer,
 } from '@/shared/stores/useKanbanIssueComposerStore';
-import type { OrganizationMemberWithProfile } from 'shared/types';
+import type { CheckStatus, OrganizationMemberWithProfile } from 'shared/types';
 import {
   KanbanProvider,
   KanbanBoard,
@@ -1062,15 +1062,33 @@ export function KanbanContainer() {
                         );
                         const issueCardPullRequests = getPullRequestsForIssue(
                           issue.id
-                        ).filter((pr) => {
-                          if (!pr.workspace_id) {
-                            return true;
-                          }
+                        )
+                          .filter((pr) => {
+                            if (!pr.workspace_id) {
+                              return true;
+                            }
 
-                          // If this PR is already visible under a workspace card,
-                          // do not render it again at the issue level.
-                          return !workspaceIdsShownOnCard.has(pr.workspace_id);
-                        });
+                            // If this PR is already visible under a workspace
+                            // card, do not render it again at the issue level.
+                            return !workspaceIdsShownOnCard.has(
+                              pr.workspace_id
+                            );
+                          })
+                          .map((pr) => ({
+                            id: pr.id,
+                            number: pr.number,
+                            url: pr.url,
+                            status: pr.status,
+                            // JM-749: the LOCAL `pull_requests` fallback row
+                            // carries an extra `check_status` field (see board.rs
+                            // `BoardPullRequestRow`) that is NOT on the generated
+                            // Electric `PullRequest` type — read it defensively so
+                            // remote/Electric mode (where it is absent) just
+                            // renders no check badge.
+                            checkStatus:
+                              (pr as { check_status?: CheckStatus | null })
+                                .check_status ?? null,
+                          }));
 
                         return (
                           <KanbanCard
