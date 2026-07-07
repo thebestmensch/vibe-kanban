@@ -10,15 +10,14 @@ _deps:
     pnpm i
 
 # Boot the local board end-to-end: install deps, then run the dev stack (backend + web)
-dev: _deps
+start: _deps
     pnpm run dev
 
 # Build the native macOS desktop app (.app bundle via Tauri)
-app: _deps
+build: _deps
     pnpm run tauri:build
 
-# Local-board verification set — mirrors `pnpm run check` minus the remote-deployment
-# (remote-web) and crates/remote steps that don't apply to / false-red the local board
+# Verify the local board (mirrors `pnpm run check`, minus the remote-web + crates/remote steps)
 check: _deps
     cargo check --workspace
     cargo test --workspace
@@ -31,8 +30,7 @@ check: _deps
     pnpm run local-web:lint
     pnpm run ui:lint
 
-# Format the local-board surfaces: Rust workspace + local web packages — mirrors
-# `pnpm run format` minus the remote-deployment (remote-web) and crates/remote paths
+# Format the local board (Rust workspace + web packages, minus remote-web + crates/remote)
 fmt: _deps
     cargo fmt --all
     pnpm run web-core:format
