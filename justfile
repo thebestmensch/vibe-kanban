@@ -17,19 +17,22 @@ dev: _deps
 app: _deps
     pnpm run tauri:build
 
-# Local-only verification set — skips the crates/remote steps that false-red in this fork
+# Local-board verification set — mirrors `pnpm run check` minus the remote-deployment
+# (remote-web) and crates/remote steps that don't apply to / false-red the local board
 check: _deps
     cargo check --workspace
     cargo test --workspace
     cargo clippy --workspace --all-targets
     pnpm run prepare-db:check
+    pnpm run local-web:legacy-path-guard
     pnpm run web-core:check
     pnpm run local-web:check
     pnpm run ui:check
     pnpm run local-web:lint
     pnpm run ui:lint
 
-# Format Rust (workspace) + web packages — skips the crates/remote format path
+# Format the local-board surfaces: Rust workspace + local web packages — mirrors
+# `pnpm run format` minus the remote-deployment (remote-web) and crates/remote paths
 fmt: _deps
     cargo fmt --all
     pnpm run web-core:format
