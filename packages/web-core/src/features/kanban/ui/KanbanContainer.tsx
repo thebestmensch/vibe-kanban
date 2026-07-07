@@ -31,6 +31,7 @@ import {
   useKanbanFilters,
   PRIORITY_ORDER,
 } from '../model/hooks/useKanbanFilters';
+import { getPrCheckStatus } from '../model/prCheckStatus';
 import {
   bulkUpdateIssues,
   type BulkUpdateIssueItem,
@@ -44,7 +45,7 @@ import {
   type ProjectIssueCreateOptions,
   useKanbanIssueComposer,
 } from '@/shared/stores/useKanbanIssueComposerStore';
-import type { CheckStatus, OrganizationMemberWithProfile } from 'shared/types';
+import type { OrganizationMemberWithProfile } from 'shared/types';
 import {
   KanbanProvider,
   KanbanBoard,
@@ -619,12 +620,10 @@ export function KanbanContainer() {
         number: pr.number,
         url: pr.url,
         status: pr.status as 'open' | 'merged' | 'closed',
-        // JM-751: carry the LOCAL fallback's extra `check_status` (see board.rs
-        // `BoardPullRequestRow`) onto the workspace-attached PR so the check
-        // badge survives when a PR renders under its workspace card instead of
-        // at the issue level. Read defensively — absent in remote/Electric mode.
-        checkStatus:
-          (pr as { check_status?: CheckStatus | null }).check_status ?? null,
+        // JM-751: carry the LOCAL fallback's extra `check_status` onto the
+        // workspace-attached PR so the check badge survives when a PR renders
+        // under its workspace card instead of at the issue level.
+        checkStatus: getPrCheckStatus(pr),
       });
       map.set(pr.workspace_id, prs);
     }
@@ -1085,15 +1084,9 @@ export function KanbanContainer() {
                             number: pr.number,
                             url: pr.url,
                             status: pr.status,
-                            // JM-749: the LOCAL `pull_requests` fallback row
-                            // carries an extra `check_status` field (see board.rs
-                            // `BoardPullRequestRow`) that is NOT on the generated
-                            // Electric `PullRequest` type — read it defensively so
-                            // remote/Electric mode (where it is absent) just
-                            // renders no check badge.
-                            checkStatus:
-                              (pr as { check_status?: CheckStatus | null })
-                                .check_status ?? null,
+                            // JM-749: read the LOCAL fallback's extra
+                            // `check_status` (absent in remote/Electric mode).
+                            checkStatus: getPrCheckStatus(pr),
                           }));
 
                         return (
