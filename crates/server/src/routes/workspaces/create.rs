@@ -387,6 +387,23 @@ pub async fn create_and_start_workspace(
     let workspace = managed_workspace.workspace.clone();
     tracing::info!("Created workspace {}", workspace.id);
 
+    // JM-749: link the workspace back to the board issue it was spawned from so
+    // the local board card can join issue → workspace → PR for branch/PR/check
+    // adornments. A stamp failure must not fail the spawn (the workspace is
+    // already usable), so it degrades to a warning.
+    if let Some(linked_issue) = &linked_issue
+        && let Err(e) =
+            Workspace::set_issue_id(&deployment.db().pool, workspace.id, linked_issue.issue_id)
+                .await
+    {
+        tracing::warn!(
+            "Failed to stamp issue_id {} onto workspace {}: {}",
+            linked_issue.issue_id,
+            workspace.id,
+            e
+        );
+    }
+
     // JM-735: a fresh Claude spawn with no explicit variant adopts the linked
     // board project's default account. No-op for non-Claude, explicit-variant,
     // and ad-hoc (no linked issue) spawns.

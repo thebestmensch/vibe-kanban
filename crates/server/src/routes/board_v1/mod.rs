@@ -22,7 +22,7 @@ use axum::{
 use chrono::Utc;
 use db::{
     LOCAL_ORG_ID,
-    models::board::{BoardProjects, Issues, ProjectStatuses},
+    models::board::{BoardProjects, BoardPullRequests, BoardWorkspaces, Issues, ProjectStatuses},
 };
 use deployment::Deployment;
 use serde::Deserialize;
@@ -40,6 +40,15 @@ pub fn router() -> Router<DeploymentImpl> {
         .route("/fallback/issues", get(fallback_issues))
         .route("/fallback/project_statuses", get(fallback_project_statuses))
         .route("/fallback/projects", get(fallback_projects))
+        .route("/fallback/pull_requests", get(fallback_pull_requests))
+        .route(
+            "/fallback/pull_request_issues",
+            get(fallback_pull_request_issues),
+        )
+        .route(
+            "/fallback/project_workspaces",
+            get(fallback_project_workspaces),
+        )
         .route("/fallback/{table}", get(fallback_stub))
         .merge(mutations::router())
 }
@@ -115,8 +124,50 @@ async fn fallback_projects(
     Ok(snapshot("projects", rows))
 }
 
+/// JM-749: local PRs shaped for the board card's `pull_requests` fallback, joined
+/// issue → workspace → PR. Carries an extra `check_status` field (2a) that feeds
+/// the card's CI-check badge; see `BoardPullRequestRow`. The sibling
+/// `pull_request_issues` route below provides the issue↔PR join the frontend uses
+/// to attach these to a card. Each is fetched independently by the sync layer, so
+/// each route runs its own query (30s refresh cadence — a fresh PR/check shows on
+/// the next tick, not instantly).
+async fn fallback_pull_requests(
+    State(deployment): State<DeploymentImpl>,
+    Query(query): Query<ProjectScoped>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let (prs, _links) =
+        BoardPullRequests::list_by_project(&deployment.db().pool, query.project_id).await?;
+    Ok(snapshot("pull_requests", prs))
+}
+
+async fn fallback_pull_request_issues(
+    State(deployment): State<DeploymentImpl>,
+    Query(query): Query<ProjectScoped>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let (_prs, links) =
+        BoardPullRequests::list_by_project(&deployment.db().pool, query.project_id).await?;
+    Ok(snapshot("pull_request_issues", links))
+}
+
+/// JM-751: local workspaces shaped for the board card's `project_workspaces`
+/// fallback. The snapshot key is `workspaces` (the shape's `table` string), which
+/// diverges from the `project_workspaces` URL segment — cf. the stub's
+/// segment→table remap below. Joins issue → workspace via the JM-749
+/// `workspaces.issue_id` link. `branch` + running-agent chips are NOT in this
+/// snapshot: the card enriches them client-side from the already-served
+/// `/api/workspaces` sidebar stream, keyed by `local_workspace_id` (== the row
+/// `id` in local mode). PRs attached to these workspaces render under the
+/// workspace sub-card via `pull_requests.workspace_id == workspace.id`.
+async fn fallback_project_workspaces(
+    State(deployment): State<DeploymentImpl>,
+    Query(query): Query<ProjectScoped>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let rows = BoardWorkspaces::list_by_project(&deployment.db().pool, query.project_id).await?;
+    Ok(snapshot("workspaces", rows))
+}
+
 /// Empty snapshot for every board-adjacent shape without a local backend yet
-/// (comments, reactions, tags, assignees, relationships, PRs, workspaces, …).
+/// (comments, reactions, tags, assignees, relationships, …).
 /// These are non-blocking for board render; returning an empty array with the
 /// correct table key keeps `extractFallbackRows` happy so no sync error fires.
 ///

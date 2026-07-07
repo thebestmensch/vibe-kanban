@@ -329,6 +329,27 @@ impl Workspace {
         .await?)
     }
 
+    /// JM-749: stamp the board issue a freshly-spawned workspace was created
+    /// from. Kept off `create()` (and out of `CreateWorkspace`) so the many
+    /// existing `create` callers and the client body stay untouched — only the
+    /// board-linked spawn path calls this, right after the record exists. NULL
+    /// otherwise, which is the correct "ad-hoc workspace" state.
+    pub async fn set_issue_id(
+        pool: &SqlitePool,
+        workspace_id: Uuid,
+        issue_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        sqlx::query!(
+            "UPDATE workspaces SET issue_id = $1, updated_at = datetime('now') WHERE id = $2",
+            issue_id,
+            workspace_id,
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn update_branch_name(
         pool: &SqlitePool,
         workspace_id: Uuid,

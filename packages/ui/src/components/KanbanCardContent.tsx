@@ -1,7 +1,7 @@
 'use client';
 
 import type { MouseEvent, ReactNode } from 'react';
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CircleDashedIcon,
@@ -14,6 +14,8 @@ import { KanbanBadge } from './KanbanBadge';
 import { KanbanAssignee, type KanbanAssigneeUser } from './KanbanAssignee';
 import { RunningDots } from './RunningDots';
 import { PrBadge, type PrBadgeStatus } from './PrBadge';
+import { PrChecksBadge } from './PrChecksBadge';
+import type { CheckStatus } from 'shared/types';
 import { LinearBadge } from './LinearBadge';
 import {
   RelationshipBadge,
@@ -37,6 +39,11 @@ export interface KanbanPullRequest {
   number: number;
   url: string;
   status: PrBadgeStatus;
+  // JM-749: aggregated CI-check status for the card's check badge. Only the
+  // local board populates this (via an extra field on the `pull_requests`
+  // fallback row — see board.rs `BoardPullRequestRow`); remote/Electric mode
+  // leaves it undefined and the badge renders nothing.
+  checkStatus?: CheckStatus | null;
 }
 
 export interface KanbanLinearLink {
@@ -325,12 +332,10 @@ export function KanbanCardContent<TTag extends KanbanTag = KanbanTag>({
             </>
           )}
           {pullRequests.slice(0, 2).map((pr) => (
-            <PrBadge
-              key={pr.id}
-              number={pr.number}
-              url={pr.url}
-              status={pr.status}
-            />
+            <Fragment key={pr.id}>
+              <PrBadge number={pr.number} url={pr.url} status={pr.status} />
+              <PrChecksBadge status={pr.checkStatus} />
+            </Fragment>
           ))}
           {pullRequests.length > 2 && (
             <span className="text-sm text-low">+{pullRequests.length - 2}</span>

@@ -31,6 +31,7 @@ import {
   useKanbanFilters,
   PRIORITY_ORDER,
 } from '../model/hooks/useKanbanFilters';
+import { getPrCheckStatus } from '../model/prCheckStatus';
 import {
   bulkUpdateIssues,
   type BulkUpdateIssueItem,
@@ -619,6 +620,10 @@ export function KanbanContainer() {
         number: pr.number,
         url: pr.url,
         status: pr.status as 'open' | 'merged' | 'closed',
+        // JM-751: carry the LOCAL fallback's extra `check_status` onto the
+        // workspace-attached PR so the check badge survives when a PR renders
+        // under its workspace card instead of at the issue level.
+        checkStatus: getPrCheckStatus(pr),
       });
       map.set(pr.workspace_id, prs);
     }
@@ -1062,15 +1067,27 @@ export function KanbanContainer() {
                         );
                         const issueCardPullRequests = getPullRequestsForIssue(
                           issue.id
-                        ).filter((pr) => {
-                          if (!pr.workspace_id) {
-                            return true;
-                          }
+                        )
+                          .filter((pr) => {
+                            if (!pr.workspace_id) {
+                              return true;
+                            }
 
-                          // If this PR is already visible under a workspace card,
-                          // do not render it again at the issue level.
-                          return !workspaceIdsShownOnCard.has(pr.workspace_id);
-                        });
+                            // If this PR is already visible under a workspace
+                            // card, do not render it again at the issue level.
+                            return !workspaceIdsShownOnCard.has(
+                              pr.workspace_id
+                            );
+                          })
+                          .map((pr) => ({
+                            id: pr.id,
+                            number: pr.number,
+                            url: pr.url,
+                            status: pr.status,
+                            // JM-749: read the LOCAL fallback's extra
+                            // `check_status` (absent in remote/Electric mode).
+                            checkStatus: getPrCheckStatus(pr),
+                          }));
 
                         return (
                           <KanbanCard

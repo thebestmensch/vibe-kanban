@@ -1,0 +1,92 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT pr.id                 as \"id!\",\n                      pr.pr_url             as \"pr_url!\",\n                      pr.pr_number          as \"pr_number!: i64\",\n                      pr.pr_status          as \"pr_status!: MergeStatus\",\n                      pr.merged_at          as \"merged_at: DateTime<Utc>\",\n                      pr.merge_commit_sha,\n                      pr.target_branch_name as \"target_branch_name!\",\n                      i.project_id          as \"project_id!: Uuid\",\n                      w.issue_id            as \"issue_id!: Uuid\",\n                      pr.workspace_id       as \"workspace_id: Uuid\",\n                      pr.created_at         as \"created_at!: DateTime<Utc>\",\n                      pr.updated_at         as \"updated_at!: DateTime<Utc>\",\n                      pr.check_status       as \"check_status: CheckStatus\"\n               FROM pull_requests pr\n               JOIN workspaces w ON pr.workspace_id = w.id\n               JOIN issues i     ON w.issue_id = i.id\n               WHERE i.project_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "pr_url!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "pr_number!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "pr_status!: MergeStatus",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "merged_at: DateTime<Utc>",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "merge_commit_sha",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "target_branch_name!",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "project_id!: Uuid",
+        "ordinal": 7,
+        "type_info": "Blob"
+      },
+      {
+        "name": "issue_id!: Uuid",
+        "ordinal": 8,
+        "type_info": "Blob"
+      },
+      {
+        "name": "workspace_id: Uuid",
+        "ordinal": 9,
+        "type_info": "Blob"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 10,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 11,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "check_status: CheckStatus",
+        "ordinal": 12,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "79840e5eeaad2671578a2b913e4ebc55be72d6c3f60f079a12d940a01ba45b95"
+}
