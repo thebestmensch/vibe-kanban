@@ -70,6 +70,17 @@ We would prefer that ideas and changes are first raised with the core team via [
 
 ## Development
 
+### One-command shortcuts (`just`)
+
+A [`justfile`](justfile) wraps the common tasks — run `just` to list them:
+
+- `just dev` — install deps and boot the local board (backend + web)
+- `just app` — build the native macOS desktop app
+- `just check` — run the local-only verification set
+- `just fmt` — format Rust + web packages
+
+The sections below document the underlying commands the recipes wrap.
+
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (latest stable)
